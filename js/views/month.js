@@ -6,7 +6,7 @@ import { categories, expenses, monthlyBudgets, settings } from '../db.js';
 import { summarizeMonth, budgetLevel } from '../budget.js';
 import { formatEuros, formatEurosCompact } from '../money.js';
 
-const THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 const LEVEL_LABEL = {
   green: 'dans le budget',
   neutral: 'à surveiller',
@@ -127,17 +127,20 @@ function renderRestauAlert(slot, summary) {
 }
 
 function renderBackupNudge(slot, cfg, app) {
+  const reminderDays = cfg?.reminderDays ?? 30;
+  if (reminderDays === 0) return; // rappel désactivé
+
   const last = cfg?.lastExportAt ?? null;
-  const stale = last === null || Date.now() - last > THIRTY_DAYS;
+  const stale = last === null || Date.now() - last > reminderDays * DAY_MS;
   if (!stale) return;
 
   slot.innerHTML = `
     <div class="backup-nudge">
       <span aria-hidden="true">💾</span>
       <span>${last === null
-        ? 'Pense à exporter une sauvegarde CSV.'
-        : 'Aucune sauvegarde depuis plus de 30 jours.'}</span>
-      <button data-act="backup">Exporter</button>
+        ? 'Pense à faire une sauvegarde.'
+        : `Aucune sauvegarde depuis plus de ${reminderDays} jours.`}</span>
+      <button data-act="backup">Sauvegarder</button>
     </div>`;
   slot.querySelector('[data-act="backup"]').addEventListener('click', () => app.navigate('settings'));
 }

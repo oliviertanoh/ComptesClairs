@@ -76,6 +76,14 @@ export async function render(root, app) {
         <button class="btn btn-secondary btn-block" data-act="restore">♻︎ Restaurer une sauvegarde</button>
         <input type="file" id="restore-file" accept=".json,application/json" hidden>
       </div>
+      <div class="list-row mt-4">
+        <span class="row-label">Me rappeler de sauvegarder</span>
+        <select id="s-reminder" style="max-width:48%">
+          <option value="7" ${(cfg?.reminderDays ?? 30) === 7 ? 'selected' : ''}>tous les 7 jours</option>
+          <option value="30" ${(cfg?.reminderDays ?? 30) === 30 ? 'selected' : ''}>tous les 30 jours</option>
+          <option value="0" ${(cfg?.reminderDays ?? 30) === 0 ? 'selected' : ''}>jamais</option>
+        </select>
+      </div>
       <p class="muted mt-4">
         Capture <strong>tout</strong> (catégories, budgets, commerçants, réglages,
         dépenses) dans un fichier. Garde-le dans Fichiers / iCloud.
@@ -187,6 +195,11 @@ export async function render(root, app) {
     await expenses.bulkPut(records);
     app.toast(`${records.length} dépense(s) importée(s).`);
     app.refresh();
+  });
+
+  // ---- Fréquence du rappel de sauvegarde ----
+  root.querySelector('#s-reminder').addEventListener('change', (e) => {
+    settings.patch({ reminderDays: Number(e.target.value) }).then(() => app.toast('Rappel mis à jour.'));
   });
 
   // ---- Sauvegarde complète (JSON) ----

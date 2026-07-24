@@ -2,8 +2,9 @@
 // helpers partagés (toast, flash, confirmation modale) fournis aux vues via
 // l'objet `app`. Aucune logique métier ici : elle vit dans budget.js.
 
-import { openDB } from './db.js';
+import { openDB, categories } from './db.js';
 import { seedIfEmpty } from './seed.js';
+import { parseBackup, restoreBackup } from './backup.js';
 
 import * as monthView from './views/month.js';
 import * as addView from './views/add.js';
@@ -213,10 +214,76 @@ function onHashChange() {
 
 // --- Démarrage --------------------------------------------------------------
 
+// Stockage persistant : demande au navigateur de ne pas évincer IndexedDB.
+async function requestPersistentStorage() {
+  try {
+    if (!navigator.storage?.persist) return;
+    const already = navigator.storage.persisted
+      ? await navigator.storage.persisted()
+      : false;
+    if (!already) {
+      const granted = await navigator.storage.persist();
+      console.log('Stockage persistant accordé :', granted);
+    }
+  } catch {
+    /* non supporté : dégradation silencieuse */
+  }
+}
+
+// Écran de premier lancement / base vide : restaurer une sauvegarde, ou
+// démarrer à neuf. Résout 'restored' ou 'fresh'.
+function showEmptyStartChoice() {
+  return new Promise((resolve) => {
+    viewEl.innerHTML = `
+      <div class="empty">
+        <span class="emoji">📊</span>
+        <h1 style="margin:0 0 var(--sp-2)">Comptes Clairs</h1>
+        <p class="muted">Aucune donnée sur cet appareil.</p>
+        <div class="stack mt-4" style="max-width:320px;margin-inline:auto">
+          <button class="btn btn-secondary btn-block" id="start-restore">♻︎ Restaurer une sauvegarde</button>
+          <button class="btn btn-primary btn-block" id="start-fresh">Démarrer à neuf</button>
+        </div>
+        <p class="muted mt-4">Si tu as un fichier de sauvegarde (iCloud / Fichiers),
+          restaure-le pour retrouver tes données.</p>
+        <input type="file" id="start-file" accept=".json,application/json" hidden>
+      </div>`;
+
+    const fileInput = viewEl.querySelector('#start-file');
+    viewEl.querySelector('#start-fresh').addEventListener('click', () => resolve('fresh'));
+    viewEl.querySelector('#start-restore').addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', async () => {
+      const file = fileInput.files?.[0];
+      if (!file) return;
+      try {
+        const parsed = parseBackup(await file.text());
+        await restoreBackup(parsed.data);
+        app.toast('Sauvegarde restaurée.');
+        resolve('restored');
+      } catch (e) {
+        app.toast(e.message);
+      }
+    });
+  });
+}
+
 async function boot() {
   viewEl.innerHTML = '<div class="empty"><span class="emoji">⏳</span>Chargement…</div>';
   await openDB();
-  await seedIfEmpty({ year: state.year, month: state.month });
+
+  // Demande à iOS de ne PAS purger la base (réduit fortement le risque de
+  // perte, même hors installation). Sans effet garanti sur Safari, dégradation
+  // silencieuse.
+  requestPersistentStorage();
+
+  // Base vide (premier lancement OU purge de stockage) : proposer de restaurer
+  // une sauvegarde avant de créer des données par défaut.
+  const empty = (await categories.all()).length === 0;
+  if (empty) {
+    const choice = await showEmptyStartChoice();
+    if (choice !== 'restored') {
+      await seedIfEmpty({ year: state.year, month: state.month });
+    }
+  }
 
   window.addEventListener('hashchange', onHashChange);
 

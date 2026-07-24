@@ -94,6 +94,7 @@ const DEFAULT_SETTINGS = {
   monthlyIncome: 0,
   savingsTarget: 0,
   lastExportAt: null,
+  reminderDays: 30, // fréquence du rappel de sauvegarde (0 = jamais)
 };
 
 /**
