@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <title>Comptes Clairs</title>
+
+  <!-- viewport-fit=cover : nécessaire pour que env(safe-area-inset-*) soit
+       renseigné sous l'encoche et la barre home de l'iPhone 14.
+       user-scalable=no + font-size:16px sur les inputs : évite le zoom auto. -->
+  <meta name="viewport"
+        content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+
+  <!-- Safari iOS ignore une partie du manifeste et exige encore ses balises. -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Comptes Clairs">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#f3f5f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#10151b" media="(prefers-color-scheme: dark)">
+  <meta name="description" content="Suivi de budget personnel, hors ligne.">
+
+  <link rel="manifest" href="./manifest.json">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <link rel="icon" href="./icons/icon-192.png">
+
+  <link rel="stylesheet" href="./css/tokens.css">
+  <link rel="stylesheet" href="./css/app.css">
+</head>
+<body>
+  <div class="app">
+    <!-- Une seule zone de vue, re-rendue à chaque changement d'onglet. -->
+    <main id="view" class="view" role="main"></main>
+
+    <!-- Barre d'onglets inférieure. -->
+    <nav class="tabbar" role="tablist" aria-label="Navigation principale">
+      <button data-route="month" role="tab" aria-current="true">
+        <span class="ico" aria-hidden="true">📊</span>
+        <span>Ce mois</span>
+      </button>
+      <button class="tab-add" data-route="add" role="tab" aria-current="false">
+        <span class="ico" aria-hidden="true">＋</span>
+        <span>Ajouter</span>
+      </button>
+      <button data-route="history" role="tab" aria-current="false">
+        <span class="ico" aria-hidden="true">🕓</span>
+        <span>Historique</span>
+      </button>
+    </nav>
+  </div>
+
+  <!-- Toast (confirmations, apprentissage de libellés). -->
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <!-- Flash de confirmation après enregistrement. -->
+  <div id="saved-flash" class="saved-flash" aria-hidden="true">
+    <div class="check">✓</div>
+  </div>
+
+  <!-- Feuille modale générique (confirmations, édition). -->
+  <div id="sheet-backdrop" class="sheet-backdrop" hidden>
+    <div id="sheet" class="sheet" role="dialog" aria-modal="true"></div>
+  </div>
+
+  <script type="module" src="./js/main.js"></script>
+</body>
+</html>

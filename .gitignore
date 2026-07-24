@@ -1,0 +1,12 @@
+# Brief de conception — contient des données financières personnelles.
+# Ne doit JAMAIS être publié (dépôt/Pages public).
+SPEC_PWA_BUDGET.md
+SPEC_APP_BUDGET.md
+SPEC_*.md
+
+# Réglages locaux de l'outillage
+.claude/settings.local.json
+
+# Divers OS / éditeurs
+.DS_Store
+*.swp

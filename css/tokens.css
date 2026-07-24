@@ -1,0 +1,104 @@
+/* tokens.css — toutes les couleurs, espacements et réglages typo.
+ *
+ * Direction visuelle : « Encre + bleu acier ». Sobriété d'une app bancaire
+ * nordique — beaucoup de blanc, la couleur réservée au signal.
+ *
+ * RÈGLE : l'accent (bleu acier) sert l'interface. Le vert / orange / rouge
+ * sont RÉSERVÉS aux états de budget. Changer de palette = éditer ce fichier.
+ */
+
+:root {
+  /* — Neutres (mode clair) — */
+  --bg: #f3f5f7;
+  --surface: #ffffff;
+  --surface-2: #eef1f4;
+  --text: #1b2430; /* encre */
+  --text-muted: #5b6b7b;
+  --text-faint: #90a0b0;
+  --border: #e2e8ee;
+  --border-strong: #cfd8e0;
+
+  /* — Accent : bleu acier désaturé (ni vert ni rouge ni orange) — */
+  --accent: #3a6ea5;
+  --accent-strong: #2f5c8a;
+  --accent-soft: #e7eef6;
+  --on-accent: #ffffff;
+
+  /* — États de budget (toujours accompagnés d'un texte/icône) — */
+  --state-green: #2e9e6b;
+  --state-green-bg: #e7f4ee;
+  --state-neutral: #5b6b7b;
+  --state-neutral-bg: #eef1f4;
+  --state-orange: #e08a00;
+  --state-orange-bg: #fdf1de;
+  --state-red: #d64545;
+  --state-red-bg: #fbe9e9;
+
+  /* — Espacements : multiples de 8 (avec demi-pas 4 et 12) — */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 24px;
+  --sp-6: 32px;
+  --sp-8: 48px;
+
+  /* — Rayons — */
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  /* — Ombres : très légères — */
+  --shadow-1: 0 1px 2px rgba(27, 36, 48, 0.06);
+  --shadow-2: 0 4px 16px rgba(27, 36, 48, 0.10);
+
+  /* — Typographie — */
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro", "SF Pro Text",
+    system-ui, "Segoe UI", Roboto, sans-serif;
+  --fs-hero: 44px; /* le « reste disponible » */
+  --fs-xl: 28px;
+  --fs-lg: 20px;
+  --fs-md: 17px;
+  --fs-base: 16px; /* ne jamais descendre en dessous sur un input (zoom iOS) */
+  --fs-sm: 14px;
+  --fs-xs: 12px;
+
+  /* — Cibles tactiles — */
+  --touch: 44px;
+
+  /* — Barre d'onglets — */
+  --tabbar-h: 64px;
+
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #10151b;
+    --surface: #1a2029;
+    --surface-2: #232b36;
+    --text: #e7ecf2;
+    --text-muted: #9fb0c0;
+    --text-faint: #6b7c8c;
+    --border: #2b3543;
+    --border-strong: #3a4655;
+
+    --accent: #6ea3d4;
+    --accent-strong: #86b4de;
+    --accent-soft: #1f2d3d;
+    --on-accent: #0f1620;
+
+    --state-green: #4ecb92;
+    --state-green-bg: #16302a;
+    --state-neutral: #9fb0c0;
+    --state-neutral-bg: #232b36;
+    --state-orange: #f0a838;
+    --state-orange-bg: #33280f;
+    --state-red: #f06a6a;
+    --state-red-bg: #351d1d;
+
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.4);
+  }
+}
