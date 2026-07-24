@@ -9,7 +9,7 @@
 // Pense à incrémenter CACHE_VERSION quand tu modifies un fichier, sinon
 // l'ancienne version reste servie depuis le cache.
 
-const CACHE_VERSION = 'comptes-clairs-v2';
+const CACHE_VERSION = 'comptes-clairs-v3';
 
 const ASSETS = [
   './',
@@ -23,6 +23,7 @@ const ASSETS = [
   './js/budget.js',
   './js/money.js',
   './js/csv.js',
+  './js/backup.js',
   './js/views/month.js',
   './js/views/add.js',
   './js/views/history.js',

@@ -245,6 +245,54 @@ export async function resetMonth(year, month) {
   });
 }
 
+/** Vide entièrement un store. */
+async function clearStore(store) {
+  const db = await openDB();
+  return asPromise(tx(db, store, 'readwrite').clear());
+}
+
+/**
+ * Exporte l'intégralité de la base (tous les stores) — sauvegarde complète.
+ * @returns {Promise<{categories:array, expenses:array, merchants:array,
+ *   monthlyBudgets:array, settings:object|null}>}
+ */
+export async function exportAll() {
+  const [cats, exps, merch, budgets, cfg] = await Promise.all([
+    getAll(STORES.categories),
+    getAll(STORES.expenses),
+    getAll(STORES.merchants),
+    getAll(STORES.monthlyBudgets),
+    settings.get(),
+  ]);
+  return {
+    categories: cats,
+    expenses: exps,
+    merchants: merch,
+    monthlyBudgets: budgets,
+    settings: cfg,
+  };
+}
+
+/**
+ * Restaure une sauvegarde complète : REMPLACE tout le contenu de la base.
+ * Destructif — la confirmation est gérée par la vue.
+ * @param {object} data structure renvoyée par exportAll()
+ */
+export async function importAll(data) {
+  await Promise.all([
+    clearStore(STORES.categories),
+    clearStore(STORES.expenses),
+    clearStore(STORES.merchants),
+    clearStore(STORES.monthlyBudgets),
+    clearStore(STORES.settings),
+  ]);
+  if (data.categories?.length) await bulkPut(STORES.categories, data.categories);
+  if (data.expenses?.length) await bulkPut(STORES.expenses, data.expenses);
+  if (data.merchants?.length) await bulkPut(STORES.merchants, data.merchants);
+  if (data.monthlyBudgets?.length) await bulkPut(STORES.monthlyBudgets, data.monthlyBudgets);
+  if (data.settings) await settings.put(data.settings);
+}
+
 /** UUID sans dépendance (dispo dans Safari iOS 17). */
 export function uuid() {
   return crypto.randomUUID();

@@ -6,6 +6,7 @@ import {
 } from '../db.js';
 import { toCents, toInputValue, formatEuros } from '../money.js';
 import { buildCSV, downloadCSV, parseCSV } from '../csv.js';
+import { buildBackup, downloadBackup, parseBackup, restoreBackup } from '../backup.js';
 
 export async function render(root, app) {
   const { year, month } = app.state;
@@ -69,18 +70,31 @@ export async function render(root, app) {
     </section>
 
     <section class="settings-section">
-      <h2>Données</h2>
+      <h2>Sauvegarde complète</h2>
       <div class="stack">
-        <button class="btn btn-secondary btn-block" data-act="export">⬇︎ Exporter en CSV</button>
-        <button class="btn btn-secondary btn-block" data-act="import">⬆︎ Importer un CSV</button>
+        <button class="btn btn-secondary btn-block" data-act="backup">🗄 Sauvegarder tout (JSON)</button>
+        <button class="btn btn-secondary btn-block" data-act="restore">♻︎ Restaurer une sauvegarde</button>
+        <input type="file" id="restore-file" accept=".json,application/json" hidden>
+      </div>
+      <p class="muted mt-4">
+        Capture <strong>tout</strong> (catégories, budgets, commerçants, réglages,
+        dépenses) dans un fichier. Garde-le dans Fichiers / iCloud.
+        ${cfg?.lastExportAt
+          ? '<br>Dernière sauvegarde : ' + new Date(cfg.lastExportAt).toLocaleDateString('fr-FR')
+          : ''}
+      </p>
+    </section>
+
+    <section class="settings-section">
+      <h2>Données (CSV & réinitialisation)</h2>
+      <div class="stack">
+        <button class="btn btn-secondary btn-block" data-act="export">⬇︎ Exporter les dépenses (CSV)</button>
+        <button class="btn btn-secondary btn-block" data-act="import">⬆︎ Importer des dépenses (CSV)</button>
         <input type="file" id="import-file" accept=".csv,text/csv" hidden>
         <button class="btn btn-danger btn-block" data-act="reset">Réinitialiser ${app.monthLabel(year, month)}</button>
       </div>
-      <p class="muted mt-4">
-        ${cfg?.lastExportAt
-          ? 'Dernière sauvegarde : ' + new Date(cfg.lastExportAt).toLocaleDateString('fr-FR')
-          : 'Aucune sauvegarde exportée pour l\'instant.'}
-      </p>
+      <p class="muted mt-4">Le CSV s'ouvre dans Excel mais ne contient que les dépenses.
+        Pour une sauvegarde totale, utilise « Sauvegarder tout » ci-dessus.</p>
     </section>
   `;
 
@@ -172,6 +186,42 @@ export async function render(root, app) {
     if (!ok) return;
     await expenses.bulkPut(records);
     app.toast(`${records.length} dépense(s) importée(s).`);
+    app.refresh();
+  });
+
+  // ---- Sauvegarde complète (JSON) ----
+  root.querySelector('[data-act="backup"]').addEventListener('click', async () => {
+    const backup = await buildBackup();
+    const filename = downloadBackup(backup);
+    await settings.patch({ lastExportAt: Date.now() });
+    app.toast(`Sauvegarde : ${filename}`);
+  });
+
+  const restoreInput = root.querySelector('#restore-file');
+  root.querySelector('[data-act="restore"]').addEventListener('click', () => restoreInput.click());
+  restoreInput.addEventListener('change', async () => {
+    const file = restoreInput.files?.[0];
+    if (!file) return;
+    restoreInput.value = '';
+    let parsed;
+    try {
+      parsed = parseBackup(await file.text());
+    } catch (e) {
+      app.toast(e.message);
+      return;
+    }
+    const c = parsed.counts;
+    const ok = await app.confirm({
+      title: 'Restaurer cette sauvegarde ?',
+      message: `Cela REMPLACE toutes les données actuelles par : `
+        + `${c.expenses} dépense(s), ${c.categories} catégorie(s), `
+        + `${c.merchants} commerçant(s). Action irréversible.`,
+      confirmLabel: 'Restaurer',
+      danger: true,
+    });
+    if (!ok) return;
+    await restoreBackup(parsed.data);
+    app.toast('Sauvegarde restaurée.');
     app.refresh();
   });
 
