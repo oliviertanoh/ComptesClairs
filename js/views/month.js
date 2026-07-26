@@ -133,9 +133,18 @@ function planCard(plan, summary) {
       </section>`;
   }
 
-  const pct = (cents) => (plan.income > 0 ? (cents / plan.income) * 100 : 0);
   const seg = plan.segments;
   const negative = plan.leftToSpend < 0;
+
+  // Les parts du revenu, dans l'ordre de lecture. On écarte celles à zéro :
+  // un segment de largeur nulle ne montre rien mais consommerait quand même
+  // son écart de 2 px, ce qui fausserait les proportions.
+  const parts = [
+    { key: 'fixed', label: 'Charges', cents: seg.fixed },
+    { key: 'spent', label: 'Dépensé', cents: seg.spent },
+    { key: 'track', label: 'Reste', cents: seg.left },
+    { key: 'savings', label: 'Épargne', cents: seg.savings },
+  ].filter((p) => p.cents > 0);
 
   // « −38 €/jour » ne veut rien dire : une fois l'enveloppe dépassée, le
   // rythme quotidien n'est plus la bonne information, le montant en trop si.
@@ -157,20 +166,14 @@ function planCard(plan, summary) {
       <div class="sub">${perDayLine}</div>
 
       <div class="plan-bar" role="img"
-           aria-label="Sur ${formatEuros(plan.income)} : ${formatEuros(seg.fixed)} de charges fixes, ${formatEuros(seg.spent)} dépensés, ${formatEuros(seg.left)} restants, ${formatEuros(seg.savings)} d'épargne">
-        <span class="seg seg-fixed" style="width:${pct(seg.fixed).toFixed(2)}%"></span>
-        <span class="seg seg-spent" style="width:${pct(seg.spent).toFixed(2)}%"></span>
-        <span class="seg seg-left" style="width:${pct(seg.left).toFixed(2)}%"></span>
-        <span class="seg seg-savings" style="width:${pct(seg.savings).toFixed(2)}%"></span>
+           aria-label="Sur ${formatEuros(plan.income)} : ${parts.map((p) => `${formatEuros(p.cents)} ${p.label.toLowerCase()}`).join(', ')}">
+        ${parts.map((p) => `<span class="seg seg-${p.key}" style="flex-grow:${p.cents}"></span>`).join('')}
       </div>
 
       <ul class="plan-legend">
-        ${seg.fixed > 0
-          ? `<li><i class="dot seg-fixed"></i>Charges<b>${formatEuros(seg.fixed)}</b></li>`
-          : ''}
-        <li><i class="dot seg-spent"></i>Dépensé<b>${formatEuros(seg.spent)}</b></li>
-        <li><i class="dot seg-left"></i>Reste<b>${formatEuros(seg.left)}</b></li>
-        <li><i class="dot seg-savings"></i>Épargne<b>${formatEuros(seg.savings)}</b></li>
+        ${parts.map((p) => `
+          <li><i class="dot seg-${p.key}"></i>${p.label}<b>${formatEuros(p.cents)}</b></li>
+        `).join('')}
       </ul>
 
       <div class="plan-verdict ${verdict.stateClass}">
@@ -412,12 +415,22 @@ function spendingChart(spends, plan, year, month) {
              stroke-dasharray="3 3" fill="none" />`
     : '';
 
-  // Marqueur « aujourd'hui ».
+  // Marqueur « aujourd'hui ». Le point fait 8 px (r=4) avec un anneau de 2 px
+  // en couleur de surface : c'est ce qui le garde lisible là où il croise la
+  // courbe, sans lui dessiner de contour encré.
   const marker = isCurrent
     ? `<line x1="${x(lastDay).toFixed(1)}" y1="${padT}" x2="${x(lastDay).toFixed(1)}" y2="${yBase.toFixed(1)}"
-             stroke="var(--border-strong)" stroke-width="1" stroke-dasharray="2 2" />
-       <circle cx="${x(lastDay).toFixed(1)}" cy="${y(cumul[lastDay]).toFixed(1)}" r="3.5"
-               fill="var(--accent)" stroke="var(--surface)" stroke-width="1.5" />`
+             stroke="var(--border)" stroke-width="1" />
+       <circle cx="${x(lastDay).toFixed(1)}" cy="${y(cumul[lastDay]).toFixed(1)}" r="4"
+               fill="var(--viz-spent)" stroke="var(--surface)" stroke-width="2" />`
+    : '';
+
+  // Une seule valeur directe : le bout de la courbe. Un nombre sur chaque
+  // point serait illisible — l'axe et la légende portent le reste.
+  const endLabel = pts.length
+    ? `<text x="${(x(lastDay) - 4).toFixed(1)}" y="${Math.max(y(cumul[lastDay]) - 9, padT + 8).toFixed(1)}"
+             font-size="10" font-weight="700" text-anchor="${lastDay > daysInMonth * 0.7 ? 'end' : 'start'}"
+             fill="var(--text)">${formatEuros(cumul[lastDay])}</text>`
     : '';
 
   // Légende d'état (texte + couleur, jamais couleur seule).
@@ -433,10 +446,11 @@ function spendingChart(spends, plan, year, month) {
         <line x1="${padL}" y1="${yBase.toFixed(1)}" x2="${W - padR}" y2="${yBase.toFixed(1)}"
               stroke="var(--border)" stroke-width="1" />
         ${paceLine}
-        ${areaPath ? `<path d="${areaPath}" fill="var(--accent-soft)" />` : ''}
-        ${linePath ? `<path d="${linePath}" fill="none" stroke="var(--accent)"
-              stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" />` : ''}
+        ${areaPath ? `<path d="${areaPath}" fill="var(--viz-spent)" fill-opacity="0.10" />` : ''}
+        ${linePath ? `<path d="${linePath}" fill="none" stroke="var(--viz-spent)"
+              stroke-width="2" stroke-linejoin="round" stroke-linecap="round" />` : ''}
         ${marker}
+        ${endLabel}
         <text x="${padL}" y="${H - 6}" font-size="9" fill="var(--text-faint)">1</text>
         <text x="${W - padR}" y="${H - 6}" font-size="9" fill="var(--text-faint)"
               text-anchor="end">${daysInMonth}</text>
@@ -444,12 +458,11 @@ function spendingChart(spends, plan, year, month) {
       <div class="chart-caption ${stateClass}">
         <span aria-hidden="true">${icon}</span><span>${caption}</span>
       </div>
-      <div class="chart-legend">
-        <span><span class="swatch" style="background:var(--accent)"></span>Dépenses variables</span>
-        ${target > 0
-          ? '<span><span class="swatch" style="background:var(--text-faint)"></span>Rythme cible</span>'
-          : ''}
-      </div>
+      ${target > 0 ? `
+        <div class="chart-legend">
+          <span><span class="swatch" style="background:var(--viz-spent)"></span>Dépenses variables</span>
+          <span><span class="swatch swatch-line"></span>Rythme cible</span>
+        </div>` : ''}
     </section>`;
 }
 

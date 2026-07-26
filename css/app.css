@@ -326,32 +326,33 @@ a,
   padding-bottom: var(--sp-4);
 }
 
+/* Les largeurs viennent de `flex-grow` (valeur brute en centimes) et non d'un
+ * pourcentage : flexbox répartit alors l'espace RESTANT après les écarts, donc
+ * les proportions restent exactes quel que soit le nombre de segments. */
 .plan-bar {
   display: flex;
+  gap: 2px;
   height: 12px;
   border-radius: var(--radius-pill);
   overflow: hidden;
-  background: var(--surface-2);
   margin: var(--sp-4) auto var(--sp-3);
   max-width: 320px;
+  background: var(--surface);
 }
 
 .plan-bar .seg {
   height: 100%;
-  transition: width 0.3s ease;
+  flex-basis: 0;
+  min-width: 0;
+  transition: flex-grow 0.3s ease;
 }
 
-/* Un liseré entre segments : deux teintes proches restent séparables. */
-.plan-bar .seg + .seg {
-  box-shadow: inset 1px 0 0 var(--surface);
-}
-
-/* Charges fixes : même famille que « dépensé » (c'est de l'argent sorti) mais
- * plus sombre — elles ne se décident pas au jour le jour. */
-.seg-fixed { background: var(--accent-strong); }
-.seg-spent { background: var(--accent); }
-.seg-left { background: color-mix(in srgb, var(--accent) 26%, var(--surface-2)); }
-.seg-savings { background: var(--state-green); }
+/* Charges fixes en teinte CHAUDE, pas en bleu foncé : deux pas du même bleu
+ * mesuraient ΔE 6,4 en vision normale — indistinguables. Voir tokens.css. */
+.seg-fixed { background: var(--viz-fixed); }
+.seg-spent { background: var(--viz-spent); }
+.seg-track { background: var(--viz-track); }
+.seg-savings { background: var(--viz-savings); }
 
 .plan-legend {
   display: flex;
@@ -443,6 +444,14 @@ a,
 .bar.state-neutral > span { background: var(--state-neutral); }
 .bar.state-orange > span { background: var(--state-orange); }
 .bar.state-red > span { background: var(--state-red); }
+
+/* Ces barres sont des COMPTEURS (une valeur contre une limite) : le rail prend
+ * un pas plus clair de la rampe du remplissage, pas un gris neutre, pour que
+ * l'état se lise sur toute la longueur et pas seulement sur la part remplie. */
+.bar.state-green { background: color-mix(in srgb, var(--state-green) 14%, var(--surface-2)); }
+.bar.state-neutral { background: var(--surface-2); }
+.bar.state-orange { background: color-mix(in srgb, var(--state-orange) 16%, var(--surface-2)); }
+.bar.state-red { background: color-mix(in srgb, var(--state-red) 16%, var(--surface-2)); }
 
 /* ------------------------------------------------------- Cartes catégorie */
 
@@ -1133,20 +1142,25 @@ textarea {
   text-align: center;
 }
 
+/* Colonne plafonnée à 24 px : on ne remplit jamais toute la case, le reste de
+ * la bande est de l'air. */
 .sb-track {
   position: relative;
   height: 96px;
-  border-radius: var(--radius-sm);
+  max-width: 24px;
+  margin-inline: auto;
+  border-radius: 4px 4px 0 0;
   background: var(--surface-2);
   display: flex;
   align-items: flex-end;
   overflow: hidden;
 }
 
+/* Bout arrondi à 4 px côté donnée, carré sur la ligne de base. */
 .sb-fill {
   display: block;
   width: 100%;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  border-radius: 4px 4px 0 0;
   transition: height 0.3s ease;
 }
 
