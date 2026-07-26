@@ -95,11 +95,55 @@ export function openDB() {
       }
     };
 
-    req.onsuccess = () => resolve(req.result);
+    // Une migration échouée doit rejeter, pas laisser la promesse en l'air :
+    // sans ça l'app reste sur « Chargement… » indéfiniment.
+    req.onupgradeneeded = withUpgradeGuard(req, req.onupgradeneeded, reject);
+
+    // BLOQUÉ : un autre onglet (ou la PWA) tient encore la version
+    // précédente. Le navigateur n'émet alors NI onsuccess NI onerror — la
+    // promesse ne se règle jamais. C'est le cas qui figeait le démarrage.
+    req.onblocked = () => {
+      reject(new Error(
+        'Base de données verrouillée par un autre onglet. Ferme les autres '
+        + 'onglets (et l\'app installée) de Comptes Clairs, puis recharge.',
+      ));
+    };
+
+    req.onsuccess = () => {
+      const db = req.result;
+      // Symétrique : quand un AUTRE onglet voudra migrer, on libère la base
+      // au lieu de le bloquer à son tour.
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
   });
 
+  // Une ouverture ratée ne doit pas être mise en cache : sans ça, toutes les
+  // tentatives suivantes rejetteraient avec la même vieille erreur, même
+  // après avoir fermé l'onglet fautif.
+  _dbPromise = _dbPromise.catch((err) => {
+    _dbPromise = null;
+    throw err;
+  });
+
   return _dbPromise;
+}
+
+/**
+ * Enveloppe le gestionnaire de migration pour transformer une exception en
+ * rejet de la promesse. Une erreur levée dans `onupgradeneeded` avorte la
+ * transaction de version sans déclencher `onerror` de façon fiable.
+ */
+function withUpgradeGuard(req, handler, reject) {
+  return (event) => {
+    try {
+      handler.call(req, event);
+    } catch (err) {
+      reject(new Error(`Migration de la base impossible : ${err.message}`));
+      try { req.transaction?.abort(); } catch { /* déjà avortée */ }
+    }
+  };
 }
 
 // --- primitives bas niveau --------------------------------------------------

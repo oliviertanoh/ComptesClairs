@@ -341,4 +341,25 @@ async function boot() {
   }
 }
 
-boot();
+// `boot()` est asynchrone : sans ce catch, la moindre erreur au démarrage
+// laissait « Chargement… » à l'écran indéfiniment, sans le moindre indice.
+// Un écran qui ne finit pas de charger est le pire des messages d'erreur.
+boot().catch((err) => {
+  console.error('Démarrage impossible', err);
+  viewEl.innerHTML = `
+    <div class="empty">
+      <span class="emoji">⚠️</span>
+      <h1 style="margin:0 0 var(--sp-2)">Démarrage impossible</h1>
+      <p class="muted">${escapeText(err?.message || String(err))}</p>
+      <div class="stack mt-4" style="max-width:320px;margin-inline:auto">
+        <button class="btn btn-primary btn-block" id="boot-retry">Réessayer</button>
+      </div>
+    </div>`;
+  viewEl.querySelector('#boot-retry').addEventListener('click', () => location.reload());
+});
+
+function escapeText(s) {
+  return String(s).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]));
+}
