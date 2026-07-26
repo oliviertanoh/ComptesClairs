@@ -129,10 +129,17 @@ export function planMonth({
   income = 0,
   savingsTarget = 0,
   totalBudget = 0,
-  totalSpent = 0,
+  fixedSpent = 0,
+  variableSpent = null,
+  totalSpent = null,
   dayOfMonth = null,
   daysInMonth = 30,
 }) {
+  // `variableSpent` explicite, sinon déduit de `totalSpent` (mois sans aucune
+  // charge fixe : tout est variable).
+  const varSpent = variableSpent ?? Math.max((totalSpent ?? 0) - fixedSpent, 0);
+  const spent = fixedSpent + varSpent;
+
   // Un objectif d'épargne supérieur au revenu n'a pas de sens : on le borne
   // plutôt que de produire un `spendable` négatif qui contaminerait tout.
   const target = clamp(savingsTarget, 0, Math.max(income, 0));
@@ -141,18 +148,23 @@ export function planMonth({
   const allocated = totalBudget;
   const unallocated = spendable - allocated;
 
-  const leftToSpend = spendable - totalSpent;
+  // LE point clé : les charges fixes du mois sont déduites en entier, qu'elles
+  // soient déjà prélevées ou non. Ce qui reste est la seule somme sur laquelle
+  // une décision quotidienne a un sens.
+  const variableSpendable = spendable - fixedSpent;
+  const leftToSpend = variableSpendable - varSpent;
 
-  // Découpage de la barre. Les trois segments somment à `income`.
-  const segSpent = clamp(totalSpent, 0, income);
-  const segLeft = clamp(leftToSpend, 0, income - segSpent);
-  const segSavings = Math.max(income - segSpent - segLeft, 0);
+  // Découpage de la barre. Les quatre segments somment à `income`.
+  const segFixed = clamp(fixedSpent, 0, income);
+  const segSpent = clamp(varSpent, 0, income - segFixed);
+  const segLeft = clamp(leftToSpend, 0, income - segFixed - segSpent);
+  const segSavings = Math.max(income - segFixed - segSpent - segLeft, 0);
 
   // `segSavings` EST l'épargne encore atteignable : dès qu'on dépasse
   // `spendable`, elle fond à la même vitesse que le dépassement.
   const savingsReachable = segSavings;
   const savingsAtRisk = Math.max(target - savingsReachable, 0);
-  const overIncome = Math.max(totalSpent - income, 0);
+  const overIncome = Math.max(spent - income, 0);
 
   // Jours restants, aujourd'hui inclus (on peut encore dépenser aujourd'hui).
   const daysLeft = dayOfMonth == null
@@ -167,25 +179,64 @@ export function planMonth({
     allocated,
     unallocated,
     overcommitted: allocated > spendable,
-    spent: totalSpent,
+    fixedSpent,
+    variableSpent: varSpent,
+    variableSpendable,
+    spent,
     leftToSpend,
     savingsAtRisk,
     savingsReachable,
     overIncome,
     daysLeft,
     perDay,
-    segments: { spent: segSpent, left: segLeft, savings: segSavings },
-    status: planStatus({ income, target, spendable, totalSpent, leftToSpend }),
+    segments: { fixed: segFixed, spent: segSpent, left: segLeft, savings: segSavings },
+    status: planStatus({ income, target, spendable, spent, fixedSpent, leftToSpend }),
   };
 }
 
-function planStatus({ income, target, spendable, totalSpent, leftToSpend }) {
+function planStatus({ income, target, spendable, spent, fixedSpent, leftToSpend }) {
   if (income <= 0) return 'no-income';
-  if (totalSpent > income) return 'over-income';
-  if (target > 0 && totalSpent > spendable) return 'savings-hit';
+  if (spent > income) return 'over-income';
+  // Les charges fixes seules mangent déjà toute l'enveloppe : aucun arbitrage
+  // quotidien ne peut rattraper ça, c'est le plan qu'il faut revoir.
+  if (fixedSpent > spendable) return 'fixed-overrun';
+  if (target > 0 && spent > spendable) return 'savings-hit';
   // Moins de 10 % de l'enveloppe restante : ça va se jouer serré.
   if (spendable > 0 && leftToSpend < spendable * 0.10) return 'tight';
   return 'ok';
+}
+
+// --- Aides au bilan (comparaisons d'un mois à l'autre) ----------------------
+
+/**
+ * Moyenne entière d'une liste de montants. 0 sur liste vide (pas NaN : une
+ * moyenne qui vaut NaN se propage jusqu'à l'affichage).
+ * @param {number[]} values
+ * @returns {number} centimes
+ */
+export function average(values) {
+  if (!values || values.length === 0) return 0;
+  return Math.round(values.reduce((s, v) => s + v, 0) / values.length);
+}
+
+/**
+ * Compare une valeur à une référence (typiquement : ce mois vs moyenne des
+ * mois précédents).
+ *
+ * `direction` n'est 'up'/'down' qu'au-delà de 5 % d'écart : sous ce seuil, la
+ * variation naturelle d'un mois à l'autre ne veut rien dire et afficher une
+ * flèche donnerait un faux signal.
+ *
+ * @returns {{delta:number, ratio:number|null, direction:'up'|'down'|'flat'|'new'}}
+ */
+export function trend(value, reference) {
+  if (!reference) {
+    return { delta: value, ratio: null, direction: value > 0 ? 'new' : 'flat' };
+  }
+  const delta = value - reference;
+  const ratio = delta / reference;
+  if (Math.abs(ratio) < 0.05) return { delta, ratio, direction: 'flat' };
+  return { delta, ratio, direction: delta > 0 ? 'up' : 'down' };
 }
 
 function clamp(v, lo, hi) {

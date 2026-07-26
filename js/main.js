@@ -10,12 +10,14 @@ import { initSync, syncOnBoot, getConfig, isConfigured } from './sync.js';
 import * as monthView from './views/month.js';
 import * as addView from './views/add.js';
 import * as historyView from './views/history.js';
+import * as bilanView from './views/bilan.js';
 import * as settingsView from './views/settings.js';
 
 const ROUTES = {
   month: monthView,
   add: addView,
   history: historyView,
+  bilan: bilanView,
   settings: settingsView,
 };
 

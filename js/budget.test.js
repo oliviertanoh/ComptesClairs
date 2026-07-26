@@ -17,7 +17,10 @@ import {
   summarizeMonth,
   remaining,
   planMonth,
+  average,
+  trend,
 } from './budget.js';
+import { appliesTo, occurrenceDate, ruleFromExpense } from './recurring.js';
 
 const results = [];
 let passed = 0;
@@ -175,6 +178,82 @@ const pPast = planMonth({
 });
 check('plan mois passé — jours restants', pPast.daysLeft, 0);
 check('plan mois passé — perDay', pPast.perDay, 0);
+
+// ---- planMonth : charges fixes séparées du variable ------------------------
+// Même scénario, mais 900 € de charges fixes sur les 1 240 € dépensés.
+// L'enveloppe quotidienne ne porte QUE sur le variable.
+const pFix = planMonth({
+  income: 210000, savingsTarget: 40000, totalBudget: 170000,
+  fixedSpent: 90000, variableSpent: 34000, dayOfMonth: 19, daysInMonth: 30,
+});
+check('fixe — total dépensé', pFix.spent, 124000);
+check('fixe — enveloppe variable', pFix.variableSpendable, 80000); // 1700 − 900
+check('fixe — reste à dépenser', pFix.leftToSpend, 46000);
+check('fixe — par jour', pFix.perDay, 3833);
+check('fixe — épargne préservée', pFix.savingsReachable, 40000);
+check('fixe — statut', pFix.status, 'ok');
+// Les QUATRE segments somment toujours au revenu.
+check('fixe — segments = revenu',
+  pFix.segments.fixed + pFix.segments.spent + pFix.segments.left + pFix.segments.savings,
+  210000);
+check('fixe — segment charges', pFix.segments.fixed, 90000);
+
+// Les charges fixes à elles seules dépassent l'enveloppe : aucun arbitrage
+// quotidien ne peut rattraper ça, c'est un statut à part.
+const pFixOver = planMonth({
+  income: 210000, savingsTarget: 40000, totalBudget: 170000,
+  fixedSpent: 180000, variableSpent: 0, dayOfMonth: 5, daysInMonth: 30,
+});
+check('fixe > enveloppe — statut', pFixOver.status, 'fixed-overrun');
+check('fixe > enveloppe — reste négatif', pFixOver.leftToSpend, -10000);
+check('fixe > enveloppe — segments = revenu',
+  pFixOver.segments.fixed + pFixOver.segments.spent
+  + pFixOver.segments.left + pFixOver.segments.savings, 210000);
+
+// Rétrocompatibilité : sans charges fixes, `totalSpent` seul se comporte
+// exactement comme avant (les assertions plus haut le vérifient déjà).
+const pLegacy = planMonth({ income: 210000, savingsTarget: 40000, totalSpent: 124000 });
+check('sans fixe — variable = total', pLegacy.variableSpent, 124000);
+check('sans fixe — segment charges nul', pLegacy.segments.fixed, 0);
+
+// ---- budget.average / trend ------------------------------------------------
+check('average vide', average([]), 0);
+check('average simple', average([1000, 2000, 3000]), 2000);
+check('average arrondi', average([1000, 1001]), 1001); // 1000,5 -> 1001
+
+check('trend hausse', trend(12000, 10000).direction, 'up');
+check('trend baisse', trend(8000, 10000).direction, 'down');
+check('trend stable sous 5 %', trend(10300, 10000).direction, 'flat');
+check('trend delta', trend(12000, 10000).delta, 2000);
+check('trend sans référence', trend(5000, 0).direction, 'new');
+check('trend sans référence ni valeur', trend(0, 0).direction, 'flat');
+
+// ---- recurring : application et bornage des dates --------------------------
+const rule = {
+  active: true, startMonth: '2026-03', endMonth: null, dayOfMonth: 5,
+};
+check('règle active dans la plage', appliesTo(rule, '2026-07'), true);
+check('règle avant son début', appliesTo(rule, '2026-02'), false);
+check('règle au mois pile du début', appliesTo(rule, '2026-03'), true);
+check('règle inactive', appliesTo({ ...rule, active: false }, '2026-07'), false);
+check('règle après sa fin', appliesTo({ ...rule, endMonth: '2026-06' }, '2026-07'), false);
+check('règle au mois pile de fin', appliesTo({ ...rule, endMonth: '2026-07' }, '2026-07'), true);
+
+// Une charge au 31 ne doit pas déborder sur le mois suivant.
+check('date occurrence normale', occurrenceDate(2026, 7, 5), '2026-07-05');
+check('date bornée en février', occurrenceDate(2026, 2, 31), '2026-02-28');
+check('date bornée en avril', occurrenceDate(2026, 4, 31), '2026-04-30');
+check('date bornée à 1 minimum', occurrenceDate(2026, 7, 0), '2026-07-01');
+check('février bissextile', occurrenceDate(2028, 2, 31), '2028-02-29');
+
+// Créer une règle depuis une dépense marque son mois comme déjà traité,
+// sinon la dépense d'origine serait dupliquée au prochain affichage.
+const madeRule = ruleFromExpense(
+  { date: '2026-07-03', label: 'Loyer', amount: 90000, categoryId: 'c1' }, null,
+);
+check('règle depuis dépense — jour', madeRule.dayOfMonth, 3);
+check('règle depuis dépense — mois déjà traité', madeRule.materialized[0], '2026-07');
+check('règle depuis dépense — pas de doublon', madeRule.materialized.length, 1);
 
 // ---- Rapport ---------------------------------------------------------------
 const summary = { passed, failed, total: passed + failed, results };

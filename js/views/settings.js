@@ -2,8 +2,10 @@
 // commerçants, export/import CSV, réinitialisation du mois.
 
 import {
-  categories, merchants, expenses, monthlyBudgets, settings, resetMonth, uuid,
+  categories, merchants, expenses, monthlyBudgets, monthlyPlan, recurring,
+  settings, resetMonth, monthKey, uuid,
 } from '../db.js';
+import { plannedFixedTotal, appliesTo } from '../recurring.js';
 import { toCents, toInputValue, formatEuros } from '../money.js';
 import { buildCSV, downloadCSV, parseCSV } from '../csv.js';
 import { buildBackup, downloadBackup, parseBackup, restoreBackup } from '../backup.js';
@@ -15,37 +17,63 @@ import {
 
 export async function render(root, app) {
   const { year, month } = app.state;
-  const [cfg, cats, budgets, merchantList, gh] = await Promise.all([
+  const [cfg, cats, budgets, merchantList, gh, plan, rules, fixedTotal] = await Promise.all([
     settings.get(),
     categories.all(),
     monthlyBudgets.ensure(year, month),
     merchants.all(),
     getSyncConfig(),
+    monthlyPlan.ensure(year, month),
+    recurring.all(),
+    plannedFixedTotal(year, month),
   ]);
 
   const active = cats.filter((c) => !c.archived).sort((a, b) => a.sortOrder - b.sortOrder);
   const budgetMap = new Map(budgets.map((b) => [b.categoryId, b.amount]));
+  const mKey = monthKey(year, month);
 
   root.innerHTML = `
     <header class="screen-head">
-      <div class="month-nav">
-        <button class="icon-btn" data-act="back" aria-label="Retour">‹</button>
-        <h1>Réglages</h1>
-      </div>
+      <h1>Réglages</h1>
+      <span class="muted">${app.monthLabel(year, month)}</span>
     </header>
 
     <section class="settings-section">
-      <h2>Revenus</h2>
+      <h2>Revenus — ${app.monthLabel(year, month)}</h2>
       <div class="list-row">
-        <span class="row-label">Revenu mensuel</span>
+        <span class="row-label">Revenu du mois</span>
         <input id="s-income" type="text" inputmode="decimal"
-               value="${toInputValue(cfg?.monthlyIncome ?? 0)}">
+               value="${toInputValue(plan?.income ?? 0)}">
       </div>
       <div class="list-row">
         <span class="row-label">Objectif d'épargne</span>
         <input id="s-savings" type="text" inputmode="decimal"
-               value="${toInputValue(cfg?.savingsTarget ?? 0)}">
+               value="${toInputValue(plan?.savingsTarget ?? 0)}">
       </div>
+      <p class="muted mt-4">
+        Ces montants sont enregistrés <strong>pour ce mois</strong> — un mois à
+        1 800 € et le suivant à 2 100 € restent tous deux justes, et le Bilan
+        calcule ton épargne passée avec le revenu que tu avais alors, pas celui
+        d'aujourd'hui. Ils servent aussi de valeur par défaut aux mois suivants.
+      </p>
+    </section>
+
+    <section class="settings-section">
+      <h2>Charges fixes</h2>
+      <p class="muted mb-4">
+        Recréées automatiquement chaque mois. Elles sont déduites en entier de
+        ton « reste à dépenser » dès le 1er, même si le prélèvement n'est pas
+        encore passé — et elles sont exclues du graphe de rythme.
+      </p>
+      <div id="rec-list">
+        ${rules.length
+          ? rules.map((r) => recurringRow(r, cats, mKey)).join('')
+          : '<p class="muted center">Aucune charge fixe.</p>'}
+      </div>
+      ${rules.length ? `<p class="muted mt-4">
+        Total prévu pour ${app.monthLabel(year, month)} :
+        <strong>${formatEuros(fixedTotal)}</strong></p>` : ''}
+      <button class="btn btn-secondary btn-block mt-4" data-act="add-rec">＋ Nouvelle charge fixe</button>
     </section>
 
     <section class="settings-section">
@@ -163,12 +191,32 @@ export async function render(root, app) {
     </section>
   `;
 
-  // ---- Revenus / épargne (sauvegarde à la sortie du champ) ----
-  root.querySelector('#s-income').addEventListener('change', (e) => {
-    settings.patch({ monthlyIncome: toCents(e.target.value) }).then(() => app.toast('Revenu mis à jour.'));
+  // ---- Revenus / épargne du mois ----
+  // Écrits sur le mois affiché, et répercutés dans les réglages (défaut des
+  // mois suivants) UNIQUEMENT s'il ne s'agit pas d'un mois passé : corriger
+  // après coup le revenu de mars ne doit pas redéfinir celui d'août.
+  const isPastMonth = mKey < monthKey(new Date().getFullYear(), new Date().getMonth() + 1);
+
+  root.querySelector('#s-income').addEventListener('change', async (e) => {
+    const income = toCents(e.target.value);
+    await monthlyPlan.put({ ...plan, income });
+    if (!isPastMonth) await settings.patch({ monthlyIncome: income });
+    app.toast('Revenu du mois mis à jour.');
+    app.refresh();
   });
-  root.querySelector('#s-savings').addEventListener('change', (e) => {
-    settings.patch({ savingsTarget: toCents(e.target.value) }).then(() => app.toast('Objectif mis à jour.'));
+  root.querySelector('#s-savings').addEventListener('change', async (e) => {
+    const savingsTarget = toCents(e.target.value);
+    await monthlyPlan.put({ ...plan, savingsTarget });
+    if (!isPastMonth) await settings.patch({ savingsTarget });
+    app.toast('Objectif mis à jour.');
+    app.refresh();
+  });
+
+  // ---- Charges fixes ----
+  root.querySelector('[data-act="add-rec"]').addEventListener('click', () => editRecurring(app, null, cats));
+  root.querySelectorAll('#rec-list .list-row').forEach((row) => {
+    const rule = rules.find((r) => r.id === row.dataset.id);
+    row.querySelector('[data-act="edit-rec"]').addEventListener('click', () => editRecurring(app, rule, cats));
   });
 
   // ---- Budgets du mois ----
@@ -221,9 +269,6 @@ export async function render(root, app) {
   renderMerchants();
   root.querySelector('#merch-search').addEventListener('input', (e) => renderMerchants(e.target.value));
   root.querySelector('[data-act="add-merch"]').addEventListener('click', () => editMerchant(app, null, cats));
-
-  // ---- Navigation ----
-  root.querySelector('[data-act="back"]').addEventListener('click', () => app.navigate('month'));
 
   // ---- Export / import / reset ----
   root.querySelector('[data-act="export"]').addEventListener('click', async () => {
@@ -459,11 +504,101 @@ function catRow(c) {
   return `<div class="list-row" data-id="${c.id}">
     <span class="row-icon" aria-hidden="true">${c.icon}</span>
     <span class="row-label">${escapeHtml(c.name)}
+      ${c.watch ? '<span class="archived-tag">— surveillée</span>' : ''}
       ${c.archived ? '<span class="archived-tag">— archivée</span>' : ''}</span>
     <button class="icon-btn" data-act="edit-cat" aria-label="Modifier">✎</button>
     <button class="icon-btn" data-act="archive-cat" aria-label="${c.archived ? 'Réactiver' : 'Archiver'}">
       ${c.archived ? '↩︎' : '🗄'}</button>
   </div>`;
+}
+
+function recurringRow(r, cats, mKey) {
+  const cat = cats.find((c) => c.id === r.categoryId);
+  const applies = appliesTo(r, mKey);
+  return `<div class="list-row" data-id="${r.id}">
+    <span class="row-icon" aria-hidden="true">${cat ? cat.icon : '🔁'}</span>
+    <span class="row-label">${escapeHtml(r.label)}
+      <br><span class="muted">le ${r.dayOfMonth} · ${formatEuros(r.amount)}${
+        r.active ? '' : ' · suspendue'
+      }${r.active && !applies ? ' · hors période' : ''}</span></span>
+    <button class="icon-btn" data-act="edit-rec" aria-label="Modifier">✎</button>
+  </div>`;
+}
+
+// Formulaire d'une charge fixe.
+async function editRecurring(app, rule, allCats) {
+  const isNew = !rule;
+  const active = allCats.filter((c) => !c.archived);
+  const s = app.sheetEl;
+  s.innerHTML = `
+    <h2>${isNew ? 'Nouvelle charge fixe' : 'Modifier la charge fixe'}</h2>
+    <div class="field"><label>Libellé</label>
+      <input id="r-label" type="text" value="${escapeAttr(rule?.label ?? '')}"
+             placeholder="Loyer, Netflix, assurance…"></div>
+    <div class="field"><label>Montant</label>
+      <input id="r-amount" type="text" inputmode="decimal"
+             value="${toInputValue(rule?.amount ?? 0)}"></div>
+    <div class="field"><label>Catégorie</label>
+      <select id="r-cat">
+        ${active.map((c) => `<option value="${c.id}" ${rule?.categoryId === c.id ? 'selected' : ''}>
+          ${escapeHtml(c.name)}</option>`).join('')}
+      </select></div>
+    <div class="field"><label>Jour du mois</label>
+      <input id="r-day" type="number" min="1" max="31" value="${rule?.dayOfMonth ?? 1}">
+      <span class="muted">Un 29, 30 ou 31 est ramené au dernier jour des mois plus courts.</span>
+    </div>
+    <div class="list-row mt-4">
+      <span class="row-label">Active</span>
+      <input type="checkbox" id="r-active" ${rule?.active ?? true ? 'checked' : ''}>
+    </div>
+    <div class="sheet-actions">
+      ${isNew ? '' : '<button class="btn btn-danger" data-act="delete">Supprimer</button>'}
+      <button class="btn btn-secondary" data-act="cancel">Annuler</button>
+      <button class="btn btn-primary" data-act="save">Enregistrer</button>
+    </div>
+  `;
+  app.openSheet();
+  s.querySelector('[data-act="cancel"]').addEventListener('click', () => app.closeSheet());
+
+  s.querySelector('[data-act="delete"]')?.addEventListener('click', async () => {
+    const ok = await app.confirm({
+      title: 'Supprimer cette charge fixe ?',
+      message: 'Les occurrences déjà créées dans les mois passés sont conservées. '
+        + 'Seules les futures cesseront d\'apparaître.',
+      confirmLabel: 'Supprimer',
+      danger: true,
+    });
+    if (!ok) return;
+    await recurring.delete(rule.id);
+    app.closeSheet();
+    app.refresh();
+  });
+
+  s.querySelector('[data-act="save"]').addEventListener('click', async () => {
+    const label = s.querySelector('#r-label').value.trim();
+    if (!label) { app.toast('Donne un libellé.'); return; }
+    const amount = toCents(s.querySelector('#r-amount').value);
+    if (amount <= 0) { app.toast('Entre un montant.'); return; }
+
+    const day = Math.min(Math.max(Number(s.querySelector('#r-day').value) || 1, 1), 31);
+    const nowKey = monthKey(new Date().getFullYear(), new Date().getMonth() + 1);
+
+    await recurring.put({
+      id: rule?.id ?? uuid(),
+      label,
+      amount,
+      categoryId: s.querySelector('#r-cat').value,
+      dayOfMonth: day,
+      active: s.querySelector('#r-active').checked,
+      // Une charge créée aujourd'hui ne rétroagit pas sur les mois passés :
+      // ça réécrirait un historique déjà arbitré.
+      startMonth: rule?.startMonth ?? nowKey,
+      endMonth: rule?.endMonth ?? null,
+      materialized: rule?.materialized ?? [],
+    });
+    app.closeSheet();
+    app.refresh();
+  });
 }
 
 // --- Formulaires modaux -----------------------------------------------------
@@ -482,6 +617,11 @@ async function editCategory(app, cat, allCats) {
     <div class="field"><label>Budget de référence</label>
       <input id="c-budget" type="text" inputmode="decimal"
              value="${toInputValue(cat?.monthlyBudget ?? 0)}"></div>
+    <div class="list-row mt-4">
+      <span class="row-label">Alerter à 75 %
+        <br><span class="muted">Bandeau sur l'accueil quand ce budget s'approche</span></span>
+      <input type="checkbox" id="c-watch" ${cat?.watch ? 'checked' : ''}>
+    </div>
     <div class="sheet-actions">
       <button class="btn btn-secondary" data-act="cancel">Annuler</button>
       <button class="btn btn-primary" data-act="save">Enregistrer</button>
@@ -501,6 +641,9 @@ async function editCategory(app, cat, allCats) {
       monthlyBudget,
       sortOrder: cat?.sortOrder ?? (Math.max(0, ...allCats.map((c) => c.sortOrder)) + 1),
       archived: cat?.archived ?? false,
+      // Drapeau de surveillance : c'est LUI qui déclenche l'alerte d'accueil,
+      // plus le nom de la catégorie. Renommer n'éteint donc plus l'alerte.
+      watch: s.querySelector('#c-watch').checked,
     };
     await categories.put(record);
     // Nouvelle catégorie : lui créer un budget pour le mois courant.

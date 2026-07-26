@@ -8,7 +8,7 @@
 // Un store par entité (voir §4 du spec).
 
 const DB_NAME = 'comptes-clairs';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 
 export const STORES = {
   categories: 'categories',
@@ -20,6 +20,10 @@ export const STORES = {
   // HORS des stores exportés — un jeton GitHub ne doit jamais se retrouver
   // dans un fichier de sauvegarde, encore moins poussé sur le dépôt.
   sync: 'sync',
+  // v3 : charges fixes récurrentes (loyer, abonnements) et instantané du
+  // plan de chaque mois (revenu + objectif d'épargne d'alors).
+  recurring: 'recurring',
+  monthlyPlan: 'monthlyPlan',
 };
 
 let _dbPromise = null;
@@ -52,7 +56,7 @@ export function openDB() {
   _dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
 
-    req.onupgradeneeded = (event) => {
+    req.onupgradeneeded = () => {
       const db = req.result;
 
       if (!db.objectStoreNames.contains(STORES.categories)) {
@@ -80,6 +84,14 @@ export function openDB() {
 
       if (!db.objectStoreNames.contains(STORES.sync)) {
         db.createObjectStore(STORES.sync, { keyPath: 'id' });
+      }
+
+      if (!db.objectStoreNames.contains(STORES.recurring)) {
+        db.createObjectStore(STORES.recurring, { keyPath: 'id' });
+      }
+
+      if (!db.objectStoreNames.contains(STORES.monthlyPlan)) {
+        db.createObjectStore(STORES.monthlyPlan, { keyPath: 'id' });
       }
     };
 
@@ -245,6 +257,76 @@ export const monthlyBudgets = {
   },
 };
 
+// --- Charges fixes récurrentes ----------------------------------------------
+//
+// Une règle décrit une charge qui retombe chaque mois (loyer, abonnement).
+// `materialized` liste les mois où la dépense a déjà été créée : c'est ce qui
+// rend la génération idempotente ET permet de supprimer une occurrence sans
+// la voir réapparaître au prochain affichage du mois.
+//
+// { id, label, amount, categoryId, dayOfMonth, active,
+//   startMonth:'YYYY-MM', endMonth:'YYYY-MM'|null, materialized:['YYYY-MM'] }
+
+export const recurring = {
+  async all() {
+    const list = await getAll(STORES.recurring);
+    return list.sort((a, b) => (a.dayOfMonth - b.dayOfMonth) || a.label.localeCompare(b.label));
+  },
+  get: (id) => get(STORES.recurring, id),
+  put: (rule) => put(STORES.recurring, rule),
+  delete: (id) => del(STORES.recurring, id),
+  bulkPut: (list) => bulkPut(STORES.recurring, list),
+};
+
+// --- Plan mensuel (revenu + objectif du mois) -------------------------------
+//
+// Le revenu ne vit plus seulement dans `settings` : on en fige un instantané
+// par mois. Sans ça, l'écran Bilan recalculerait l'épargne de mars avec le
+// salaire d'aujourd'hui — un historique faux est pire que pas d'historique.
+
+export const monthlyPlan = {
+  all: () => getAll(STORES.monthlyPlan),
+  put: (plan) => put(STORES.monthlyPlan, plan),
+  bulkPut: (list) => bulkPut(STORES.monthlyPlan, list),
+
+  /**
+   * Instantané d'un mois. Créé à la volée depuis les réglages pour le mois
+   * courant et les suivants.
+   *
+   * Pour un mois PASSÉ sans instantané, on renvoie un objet à zéro SANS
+   * l'enregistrer : y estampiller le revenu d'aujourd'hui inventerait un
+   * historique. On ne sait pas ce qui est rentré en mars — l'écran Bilan
+   * masque donc ce mois, et l'utilisateur peut le renseigner explicitement
+   * depuis les réglages (ce qui, lui, écrit vraiment).
+   */
+  async ensure(year, month) {
+    const id = monthKey(year, month);
+    const existing = await get(STORES.monthlyPlan, id);
+    if (existing) return existing;
+
+    const now = new Date();
+    const isPast = id < monthKey(now.getFullYear(), now.getMonth() + 1);
+
+    const cfg = (await settings.get()) || {};
+    const draft = {
+      id,
+      year,
+      month,
+      income: isPast ? 0 : (cfg.monthlyIncome ?? 0),
+      savingsTarget: isPast ? 0 : (cfg.savingsTarget ?? 0),
+    };
+    if (isPast) return draft;
+
+    await put(STORES.monthlyPlan, draft);
+    return draft;
+  },
+};
+
+/** Clé de mois normalisée « YYYY-MM ». */
+export function monthKey(year, month) {
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
 // --- Réglages (singleton) ---------------------------------------------------
 
 const SETTINGS_ID = 'singleton';
@@ -310,11 +392,13 @@ async function clearStore(store) {
  *   monthlyBudgets:array, settings:object|null}>}
  */
 export async function exportAll() {
-  const [cats, exps, merch, budgets, cfg] = await Promise.all([
+  const [cats, exps, merch, budgets, rules, plans, cfg] = await Promise.all([
     getAll(STORES.categories),
     getAll(STORES.expenses),
     getAll(STORES.merchants),
     getAll(STORES.monthlyBudgets),
+    getAll(STORES.recurring),
+    getAll(STORES.monthlyPlan),
     settings.get(),
   ]);
   return {
@@ -322,6 +406,8 @@ export async function exportAll() {
     expenses: exps,
     merchants: merch,
     monthlyBudgets: budgets,
+    recurring: rules,
+    monthlyPlan: plans,
     settings: cfg,
   };
 }
@@ -332,17 +418,24 @@ export async function exportAll() {
  * @param {object} data structure renvoyée par exportAll()
  */
 export async function importAll(data) {
+  // STORES.sync est délibérément absent : restaurer une sauvegarde ne doit
+  // pas déconnecter l'appareil de son dépôt (le jeton n'est de toute façon
+  // jamais dans le fichier).
   await Promise.all([
     clearStore(STORES.categories),
     clearStore(STORES.expenses),
     clearStore(STORES.merchants),
     clearStore(STORES.monthlyBudgets),
+    clearStore(STORES.recurring),
+    clearStore(STORES.monthlyPlan),
     clearStore(STORES.settings),
   ]);
   if (data.categories?.length) await bulkPut(STORES.categories, data.categories);
   if (data.expenses?.length) await bulkPut(STORES.expenses, data.expenses);
   if (data.merchants?.length) await bulkPut(STORES.merchants, data.merchants);
   if (data.monthlyBudgets?.length) await bulkPut(STORES.monthlyBudgets, data.monthlyBudgets);
+  if (data.recurring?.length) await bulkPut(STORES.recurring, data.recurring);
+  if (data.monthlyPlan?.length) await bulkPut(STORES.monthlyPlan, data.monthlyPlan);
   if (data.settings) await settings.put(data.settings);
 }
 
