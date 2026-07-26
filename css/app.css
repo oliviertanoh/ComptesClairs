@@ -216,6 +216,41 @@ a,
   font-size: 20px;
 }
 
+/* Bandeau « tu n'es pas sur le mois en cours ».
+ * Les budgets et le revenu sont mensuels : éditer août en croyant éditer
+ * juillet donne l'impression que tout a disparu. Volontairement en accent et
+ * non en couleur d'état — c'est un repère de navigation, pas une alerte. */
+.month-flag {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-4);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  font-size: var(--fs-sm);
+}
+
+.month-flag span {
+  flex: 1;
+}
+
+.month-flag button {
+  flex: none;
+  min-height: 32px;
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: capitalize;
+  cursor: pointer;
+}
+
 /* Rappel discret de sauvegarde. */
 .backup-nudge {
   display: flex;

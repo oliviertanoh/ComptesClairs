@@ -63,12 +63,15 @@ export async function render(root, app) {
       <h1 class="head-title">Bilan</h1>
     </header>
 
+    ${app.offMonthBanner()}
+
     ${savingsSection(byMonth, planByKey, year, month)}
     ${categorySection(byMonth, catById, currentKey, previousKeys)}
   `;
 
   root.querySelector('[data-act="prev"]').addEventListener('click', () => app.shiftMonth(-1));
   root.querySelector('[data-act="next"]').addEventListener('click', () => app.shiftMonth(1));
+  app.bindOffMonthBanner(root);
 }
 
 // --- Épargne réalisée, mois par mois ----------------------------------------

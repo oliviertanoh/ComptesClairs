@@ -35,8 +35,14 @@ export async function render(root, app) {
   root.innerHTML = `
     <header class="screen-head">
       <h1>Réglages</h1>
-      <span class="muted">${app.monthLabel(year, month)}</span>
+      <div class="month-nav">
+        <button class="icon-btn" data-act="prev" aria-label="Mois précédent">‹</button>
+        <span class="label">${app.monthLabel(year, month)}</span>
+        <button class="icon-btn" data-act="next" aria-label="Mois suivant">›</button>
+      </div>
     </header>
+
+    ${app.offMonthBanner()}
 
     <section class="settings-section">
       <h2>Revenus — ${app.monthLabel(year, month)}</h2>
@@ -211,6 +217,11 @@ export async function render(root, app) {
     app.toast('Objectif mis à jour.');
     app.refresh();
   });
+
+  // ---- Navigation de mois (les budgets et le revenu sont mensuels) ----
+  root.querySelector('[data-act="prev"]').addEventListener('click', () => app.shiftMonth(-1));
+  root.querySelector('[data-act="next"]').addEventListener('click', () => app.shiftMonth(1));
+  app.bindOffMonthBanner(root);
 
   // ---- Charges fixes ----
   root.querySelector('[data-act="add-rec"]').addEventListener('click', () => editRecurring(app, null, cats));

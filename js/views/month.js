@@ -75,6 +75,8 @@ export async function render(root, app) {
       </div>
     </header>
 
+    ${app.offMonthBanner()}
+
     <div id="alert-slot"></div>
 
     ${planCard(plan, summary)}
@@ -106,6 +108,7 @@ export async function render(root, app) {
   // Événements.
   root.querySelector('[data-act="prev"]').addEventListener('click', () => app.shiftMonth(-1));
   root.querySelector('[data-act="next"]').addEventListener('click', () => app.shiftMonth(1));
+  app.bindOffMonthBanner(root);
   root.querySelector('[data-act="set-income"]')
     ?.addEventListener('click', () => app.navigate('settings'));
 }

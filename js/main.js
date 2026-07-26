@@ -57,6 +57,35 @@ const app = {
     return state.year === n.getFullYear() && state.month === n.getMonth() + 1;
   },
 
+  /** Revient au mois en cours et rafraîchit. */
+  goToCurrentMonth() {
+    const n = new Date();
+    state.year = n.getFullYear();
+    state.month = n.getMonth() + 1;
+    this.refresh();
+  },
+
+  /**
+   * Bandeau affiché dès qu'on n'est PAS sur le mois en cours. Les budgets
+   * étant enregistrés par mois, éditer août en croyant éditer juillet donne
+   * l'impression que tout a disparu — le libellé seul ne suffisait pas.
+   */
+  offMonthBanner() {
+    if (this.isCurrentMonth()) return '';
+    const n = new Date();
+    return `
+      <div class="month-flag">
+        <span>Tu consultes <strong>${this.monthLabel()}</strong>, pas le mois en cours.</span>
+        <button data-act="today">${this.monthLabel(n.getFullYear(), n.getMonth() + 1)}</button>
+      </div>`;
+  },
+
+  /** Branche le bouton du bandeau ci-dessus, s'il est présent. */
+  bindOffMonthBanner(root) {
+    root.querySelector('.month-flag [data-act="today"]')
+      ?.addEventListener('click', () => this.goToCurrentMonth());
+  },
+
   /** Change le mois affiché de ±1 et rafraîchit. */
   shiftMonth(delta) {
     let m = state.month + delta;
