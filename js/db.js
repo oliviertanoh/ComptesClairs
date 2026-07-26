@@ -8,7 +8,7 @@
 // Un store par entité (voir §4 du spec).
 
 const DB_NAME = 'comptes-clairs';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export const STORES = {
   categories: 'categories',
@@ -16,9 +16,34 @@ export const STORES = {
   merchants: 'merchants',
   monthlyBudgets: 'monthlyBudgets',
   settings: 'settings',
+  // v2 : configuration de synchronisation (dépôt, jeton). Volontairement
+  // HORS des stores exportés — un jeton GitHub ne doit jamais se retrouver
+  // dans un fichier de sauvegarde, encore moins poussé sur le dépôt.
+  sync: 'sync',
 };
 
 let _dbPromise = null;
+
+// --- Notification des écritures ---------------------------------------------
+// La synchronisation a besoin de savoir « quelque chose a changé » sans que
+// chaque vue ait à l'appeler. On émet donc ici, au seul endroit qui écrit.
+
+const changes = new EventTarget();
+
+/**
+ * S'abonne aux écritures en base.
+ * @param {(store:string)=>void} handler
+ * @returns {()=>void} désabonnement
+ */
+export function onDbChange(handler) {
+  const wrapped = (e) => handler(e.detail.store);
+  changes.addEventListener('change', wrapped);
+  return () => changes.removeEventListener('change', wrapped);
+}
+
+function emitChange(store) {
+  changes.dispatchEvent(new CustomEvent('change', { detail: { store } }));
+}
 
 /** Ouvre (et migre au besoin) la base. Idempotent. */
 export function openDB() {
@@ -51,6 +76,10 @@ export function openDB() {
 
       if (!db.objectStoreNames.contains(STORES.settings)) {
         db.createObjectStore(STORES.settings, { keyPath: 'id' });
+      }
+
+      if (!db.objectStoreNames.contains(STORES.sync)) {
+        db.createObjectStore(STORES.sync, { keyPath: 'id' });
       }
     };
 
@@ -88,12 +117,15 @@ async function put(store, value) {
   const db = await openDB();
   const os = tx(db, store, 'readwrite');
   await asPromise(os.put(value));
+  emitChange(store);
   return value;
 }
 
 async function del(store, key) {
   const db = await openDB();
-  return asPromise(tx(db, store, 'readwrite').delete(key));
+  const result = await asPromise(tx(db, store, 'readwrite').delete(key));
+  emitChange(store);
+  return result;
 }
 
 /** Insère un lot dans une seule transaction (utilisé par le seed / l'import). */
@@ -103,7 +135,7 @@ async function bulkPut(store, values) {
     const t = db.transaction(store, 'readwrite');
     const os = t.objectStore(store);
     for (const v of values) os.put(v);
-    t.oncomplete = () => resolve(values.length);
+    t.oncomplete = () => { emitChange(store); resolve(values.length); };
     t.onerror = () => reject(t.error);
   });
 }
@@ -230,6 +262,27 @@ export const settings = {
   },
 };
 
+// --- Config de synchronisation (singleton, JAMAIS exportée) -----------------
+//
+// Vit dans son propre store pour une raison précise : `exportAll()` ne le lit
+// pas, donc le jeton GitHub ne peut pas se retrouver dans une sauvegarde —
+// ni dans le fichier JSON, ni dans le fichier poussé sur le dépôt.
+// `importAll()` ne le vide pas non plus : restaurer une sauvegarde ne
+// déconnecte pas l'appareil.
+
+const SYNC_ID = 'github';
+
+export const syncConfig = {
+  async get() {
+    return (await get(STORES.sync, SYNC_ID)) || null;
+  },
+  async patch(partial) {
+    const current = (await this.get()) || { id: SYNC_ID };
+    return put(STORES.sync, { ...current, ...partial, id: SYNC_ID });
+  },
+  clear: () => del(STORES.sync, SYNC_ID),
+};
+
 // --- Réinitialisation d'un mois --------------------------------------------
 
 /** Supprime toutes les dépenses d'un mois donné (avec confirmation côté vue). */
@@ -240,7 +293,7 @@ export async function resetMonth(year, month) {
     const t = db.transaction(STORES.expenses, 'readwrite');
     const os = t.objectStore(STORES.expenses);
     for (const e of list) os.delete(e.id);
-    t.oncomplete = () => resolve(list.length);
+    t.oncomplete = () => { emitChange(STORES.expenses); resolve(list.length); };
     t.onerror = () => reject(t.error);
   });
 }

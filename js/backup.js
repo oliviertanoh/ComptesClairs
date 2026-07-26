@@ -47,9 +47,13 @@ export function downloadBackup(backupObj) {
 
 /**
  * Analyse et valide un fichier de sauvegarde. Lève une erreur si invalide.
+ * Renvoie aussi les métadonnées : la synchronisation GitHub s'en sert pour
+ * dire « sauvegardé le X depuis Y » avant d'écraser quoi que ce soit.
+ *
  * @param {string} text contenu du fichier
- * @returns {{data:object, counts:{categories:number, expenses:number,
- *   merchants:number, monthlyBudgets:number}}}
+ * @returns {{data:object, exportedAt:number|null, device:string|null,
+ *   counts:{categories:number, expenses:number, merchants:number,
+ *   monthlyBudgets:number}}}
  */
 export function parseBackup(text) {
   let obj;
@@ -64,6 +68,8 @@ export function parseBackup(text) {
   const d = obj.data;
   return {
     data: d,
+    exportedAt: typeof obj.exportedAt === 'number' ? obj.exportedAt : null,
+    device: typeof obj.device === 'string' ? obj.device : null,
     counts: {
       categories: d.categories?.length ?? 0,
       expenses: d.expenses?.length ?? 0,

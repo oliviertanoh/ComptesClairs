@@ -3,8 +3,9 @@
 // dépassement sans le chercher.
 
 import { categories, expenses, monthlyBudgets, settings } from '../db.js';
-import { summarizeMonth, budgetLevel } from '../budget.js';
+import { summarizeMonth, planMonth } from '../budget.js';
 import { formatEuros, formatEurosCompact } from '../money.js';
+import { onSyncStatus, statusLabel, getStatus as getSyncStatus } from '../sync.js';
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const LEVEL_LABEL = {
@@ -34,6 +35,19 @@ export async function render(root, app) {
     income,
   });
 
+  // Le plan : ce que devient le revenu une fois l'épargne réservée.
+  const now = new Date();
+  const isCurrent = year === now.getFullYear() && month === now.getMonth() + 1;
+  const daysInMonth = new Date(year, month, 0).getDate();
+  const plan = planMonth({
+    income,
+    savingsTarget: cfg?.savingsTarget ?? 0,
+    totalBudget: summary.totalBudget,
+    totalSpent: summary.totalSpent,
+    dayOfMonth: isCurrent ? now.getDate() : null,
+    daysInMonth,
+  });
+
   root.innerHTML = `
     <header class="screen-head">
       <div class="month-nav">
@@ -41,23 +55,15 @@ export async function render(root, app) {
         <span class="label">${app.monthLabel(year, month)}</span>
         <button class="icon-btn" data-act="next" aria-label="Mois suivant">›</button>
       </div>
-      <button class="icon-btn" data-act="settings" aria-label="Réglages">⚙️</button>
+      <div class="head-right">
+        <span id="sync-chip" class="sync-chip" hidden></span>
+        <button class="icon-btn" data-act="settings" aria-label="Réglages">⚙️</button>
+      </div>
     </header>
 
     <div id="alert-slot"></div>
 
-    <section class="card remaining">
-      <div class="caption">Reste disponible</div>
-      <div class="amount ${summary.remaining < 0 ? 'is-negative' : ''}">
-        ${formatEurosCompact(summary.remaining)}
-      </div>
-      <div class="sub">
-        ${formatEuros(summary.totalSpent)} dépensés sur ${formatEuros(income)}
-      </div>
-      <div class="bar global-progress ${globalLevel(summary)}">
-        <span style="width:${Math.round(summary.ratio * 100)}%"></span>
-      </div>
-    </section>
+    ${planCard(plan, summary)}
 
     <div class="cat-list">
       ${summary.categories.map((c) => catCard(c)).join('')}
@@ -71,18 +77,172 @@ export async function render(root, app) {
   // Alerte prioritaire : Restau/livraison à ≥ 75 %.
   renderRestauAlert(root.querySelector('#alert-slot'), summary);
 
-  // Rappel de sauvegarde discret (> 30 jours sans export).
+  // Rappel de sauvegarde discret (> 30 jours sans export), masqué si la
+  // synchronisation GitHub s'en charge déjà.
   renderBackupNudge(root.querySelector('#backup-slot'), cfg, app);
+
+  // Pastille d'état de synchro, discrète tant que tout va bien.
+  bindSyncChip(root.querySelector('#sync-chip'), app);
 
   // Événements.
   root.querySelector('[data-act="prev"]').addEventListener('click', () => app.shiftMonth(-1));
   root.querySelector('[data-act="next"]').addEventListener('click', () => app.shiftMonth(1));
   root.querySelector('[data-act="settings"]').addEventListener('click', () => app.navigate('settings'));
+  root.querySelector('[data-act="set-income"]')
+    ?.addEventListener('click', () => app.navigate('settings'));
 }
 
-function globalLevel(summary) {
-  return `state-${budgetLevel(summary.totalSpent, summary.totalBudget)}`;
+// --- Carte « plan du mois » -------------------------------------------------
+// Un seul écran doit répondre à : « combien puis-je encore sortir aujourd'hui
+// sans casser mon épargne ? ». C'est `leftToSpend`, en gros, et le détail
+// dessous sous forme de barre : dépensé | reste | épargne, qui somment au
+// revenu. Quand on mord sur l'épargne, son segment rétrécit à vue d'œil.
+
+function planCard(plan, summary) {
+  if (plan.status === 'no-income') {
+    return `
+      <section class="card remaining">
+        <div class="caption">Dépensé ce mois</div>
+        <div class="amount">${formatEurosCompact(summary.totalSpent)}</div>
+        <div class="sub">Renseigne ton revenu et ton objectif d'épargne
+          pour voir ce qu'il te reste à dépenser.</div>
+        <button class="btn btn-secondary btn-block mt-4" data-act="set-income">
+          Régler revenu et épargne
+        </button>
+      </section>`;
+  }
+
+  const pct = (cents) => (plan.income > 0 ? (cents / plan.income) * 100 : 0);
+  const seg = plan.segments;
+  const negative = plan.leftToSpend < 0;
+
+  // « −38 €/jour » ne veut rien dire : une fois l'enveloppe dépassée, le
+  // rythme quotidien n'est plus la bonne information, le montant en trop si.
+  const plural = plan.daysLeft > 1 ? 's' : '';
+  const perDayLine = plan.leftToSpend <= 0
+    ? `${formatEuros(plan.spent)} dépensés sur ${formatEuros(plan.spendable)} dépensables`
+    : plan.daysLeft > 0
+      ? `soit ${formatEuros(plan.perDay)}/jour sur ${plan.daysLeft} jour${plural} restant${plural}`
+      : `${formatEuros(plan.spent)} dépensés sur ${formatEuros(plan.spendable)} dépensables`;
+
+  const verdict = planVerdict(plan);
+
+  return `
+    <section class="card remaining plan-card">
+      <div class="caption">Reste à dépenser</div>
+      <div class="amount ${negative ? 'is-negative' : ''}">
+        ${formatEurosCompact(plan.leftToSpend)}
+      </div>
+      <div class="sub">${perDayLine}</div>
+
+      <div class="plan-bar" role="img"
+           aria-label="${formatEuros(seg.spent)} dépensés, ${formatEuros(seg.left)} restants, ${formatEuros(seg.savings)} d'épargne sur ${formatEuros(plan.income)}">
+        <span class="seg seg-spent" style="width:${pct(seg.spent).toFixed(2)}%"></span>
+        <span class="seg seg-left" style="width:${pct(seg.left).toFixed(2)}%"></span>
+        <span class="seg seg-savings" style="width:${pct(seg.savings).toFixed(2)}%"></span>
+      </div>
+
+      <ul class="plan-legend">
+        <li><i class="dot seg-spent"></i>Dépensé<b>${formatEuros(seg.spent)}</b></li>
+        <li><i class="dot seg-left"></i>Reste<b>${formatEuros(seg.left)}</b></li>
+        <li><i class="dot seg-savings"></i>Épargne<b>${formatEuros(seg.savings)}</b></li>
+      </ul>
+
+      <div class="plan-verdict ${verdict.stateClass}">
+        <span aria-hidden="true">${verdict.icon}</span><span>${verdict.text}</span>
+      </div>
+      ${planAllocationNote(plan)}
+    </section>`;
 }
+
+function planVerdict(plan) {
+  const target = formatEuros(plan.savingsTarget);
+  switch (plan.status) {
+    case 'over-income':
+      return {
+        icon: '🚨',
+        stateClass: 'state-red',
+        text: `Tu as dépensé ${formatEuros(plan.overIncome)} de plus que ton revenu — `
+          + `objectif d'épargne perdu, et tu puises ailleurs.`,
+      };
+    case 'savings-hit':
+      return {
+        icon: '⚠️',
+        stateClass: 'state-red',
+        text: `Épargne entamée de ${formatEuros(plan.savingsAtRisk)} : il ne reste que `
+          + `${formatEuros(plan.savingsReachable)} des ${target} visés.`,
+      };
+    case 'tight':
+      return {
+        icon: '⚠️',
+        stateClass: 'state-orange',
+        text: plan.savingsTarget > 0
+          ? `Marge très fine avant d'entamer tes ${target} d'épargne.`
+          : 'Marge très fine avant de dépasser ton revenu.',
+      };
+    default:
+      return {
+        icon: '✓',
+        stateClass: 'state-green',
+        text: plan.savingsTarget > 0
+          ? `Objectif d'épargne de ${target} préservé.`
+          : `Dans ton revenu.`,
+      };
+  }
+}
+
+// Cohérence du PLAN lui-même, indépendante de ce qui a été dépensé : la somme
+// des budgets par catégorie tient-elle dans le revenu moins l'épargne ? Un
+// dépassement ici se voit dès le 1er du mois, avant la moindre dépense.
+function planAllocationNote(plan) {
+  if (plan.savingsTarget === 0 && plan.allocated === 0) return '';
+
+  if (plan.overcommitted) {
+    return `
+      <div class="plan-note state-orange">
+        Tes budgets totalisent ${formatEuros(plan.allocated)}, soit
+        <strong>${formatEuros(-plan.unallocated)} de trop</strong> pour garder
+        ${formatEuros(plan.savingsTarget)} d'épargne. Baisse un budget, ou l'objectif.
+      </div>`;
+  }
+  if (plan.unallocated > 0) {
+    return `
+      <div class="plan-note">
+        ${formatEuros(plan.unallocated)} non affectés à une catégorie.
+      </div>`;
+  }
+  return '';
+}
+
+// --- Pastille de synchronisation --------------------------------------------
+
+function bindSyncChip(chip, app) {
+  if (!chip) return;
+  const off = onSyncStatus((s) => {
+    // Rien à signaler quand c'est à jour : on ne meuble pas l'écran.
+    if (s.state === 'disabled' || s.state === 'idle' || s.state === 'ok') {
+      chip.hidden = true;
+      return;
+    }
+    chip.hidden = false;
+    chip.textContent = SYNC_ICON[s.state] ?? '↻';
+    chip.className = `sync-chip is-${s.state}`;
+    chip.title = statusLabel(s);
+    chip.setAttribute('aria-label', `Synchronisation : ${statusLabel(s)}`);
+  });
+  // La vue est jetée et re-rendue en permanence : sans ça, on empilerait des
+  // abonnements pointant vers des nœuds détachés.
+  app.onCleanup(off);
+  chip.addEventListener('click', () => app.navigate('settings'));
+}
+
+const SYNC_ICON = {
+  syncing: '↻',
+  pending: '•',
+  offline: '⚡',
+  error: '!',
+  conflict: '⚠',
+};
 
 function catCard(c) {
   const pct = Math.round((c.budget > 0 ? c.spent / c.budget : (c.spent > 0 ? 1 : 0)) * 100);
@@ -129,6 +289,9 @@ function renderRestauAlert(slot, summary) {
 function renderBackupNudge(slot, cfg, app) {
   const reminderDays = cfg?.reminderDays ?? 30;
   if (reminderDays === 0) return; // rappel désactivé
+  // La sync GitHub sauvegarde toute seule : harceler pour un export manuel
+  // n'aurait plus de sens.
+  if (getSyncStatus().state !== 'disabled') return;
 
   const last = cfg?.lastExportAt ?? null;
   const stale = last === null || Date.now() - last > reminderDays * DAY_MS;

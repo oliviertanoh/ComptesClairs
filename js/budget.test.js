@@ -16,6 +16,7 @@ import {
   spentByCategory,
   summarizeMonth,
   remaining,
+  planMonth,
 } from './budget.js';
 
 const results = [];
@@ -106,6 +107,74 @@ check('summary remaining', s.remaining, 173000);
 check('summary restau red', s.categories[0].level, 'red');
 check('summary restau over', s.categories[0].over, 5000);
 check('summary courses green', s.categories[1].level, 'green');
+
+// ---- budget.planMonth (revenu / épargne / reste à dépenser) ----------------
+// Scénario de référence : 2 100 € de revenu, 400 € d'épargne visée,
+// 1 700 € de budgets, 1 240 € déjà dépensés au 19 d'un mois de 30 jours.
+const p = planMonth({
+  income: 210000, savingsTarget: 40000, totalBudget: 170000,
+  totalSpent: 124000, dayOfMonth: 19, daysInMonth: 30,
+});
+check('plan spendable', p.spendable, 170000);
+check('plan leftToSpend', p.leftToSpend, 46000);
+check('plan non alloué', p.unallocated, 0);
+check('plan pas surengagé', p.overcommitted, false);
+check('plan épargne atteignable', p.savingsReachable, 40000);
+check('plan épargne en danger', p.savingsAtRisk, 0);
+check('plan jours restants (aujourd’hui inclus)', p.daysLeft, 12);
+check('plan par jour', p.perDay, 3833); // 460 € / 12 j = 38,33 €
+check('plan statut', p.status, 'ok');
+// Les 3 segments de la barre somment toujours au revenu.
+check('plan segments = revenu',
+  p.segments.spent + p.segments.left + p.segments.savings, 210000);
+
+// L'épargne est entamée : le segment épargne rétrécit d'autant.
+const pHit = planMonth({
+  income: 210000, savingsTarget: 40000, totalBudget: 170000,
+  totalSpent: 180000, dayOfMonth: 25, daysInMonth: 30,
+});
+check('plan entamé — reste négatif', pHit.leftToSpend, -10000);
+check('plan entamé — épargne atteignable', pHit.savingsReachable, 30000);
+check('plan entamé — épargne en danger', pHit.savingsAtRisk, 10000);
+check('plan entamé — statut', pHit.status, 'savings-hit');
+check('plan entamé — segments = revenu',
+  pHit.segments.spent + pHit.segments.left + pHit.segments.savings, 210000);
+
+// Dépassement du revenu lui-même.
+const pOver = planMonth({
+  income: 210000, savingsTarget: 40000, totalBudget: 170000,
+  totalSpent: 220000, dayOfMonth: 30, daysInMonth: 30,
+});
+check('plan hors revenu — dépassement', pOver.overIncome, 10000);
+check('plan hors revenu — épargne atteignable', pOver.savingsReachable, 0);
+check('plan hors revenu — statut', pOver.status, 'over-income');
+check('plan hors revenu — segment dépensé borné au revenu', pOver.segments.spent, 210000);
+
+// Budgets incohérents avec l'objectif : détecté AVANT toute dépense.
+const pBad = planMonth({
+  income: 210000, savingsTarget: 40000, totalBudget: 190000,
+  totalSpent: 0, dayOfMonth: 1, daysInMonth: 31,
+});
+check('plan surengagé', pBad.overcommitted, true);
+check('plan surengagé — écart', pBad.unallocated, -20000);
+check('plan surengagé — jours restants', pBad.daysLeft, 31);
+
+// Épargne visée > revenu : bornée, jamais de `spendable` négatif.
+const pAbsurd = planMonth({ income: 100000, savingsTarget: 150000 });
+check('plan épargne bornée au revenu', pAbsurd.savingsTarget, 100000);
+check('plan spendable jamais négatif', pAbsurd.spendable, 0);
+
+// Revenu non renseigné : aucun plan possible, mais aucune division par zéro.
+const pNone = planMonth({ income: 0, savingsTarget: 0, totalSpent: 5000 });
+check('plan sans revenu — statut', pNone.status, 'no-income');
+check('plan sans revenu — perDay', pNone.perDay, 0);
+
+// Mois passé (pas de jour courant) : pas de « par jour ».
+const pPast = planMonth({
+  income: 210000, savingsTarget: 40000, totalSpent: 100000, daysInMonth: 31,
+});
+check('plan mois passé — jours restants', pPast.daysLeft, 0);
+check('plan mois passé — perDay', pPast.perDay, 0);
 
 // ---- Rapport ---------------------------------------------------------------
 const summary = { passed, failed, total: passed + failed, results };
