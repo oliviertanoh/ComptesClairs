@@ -2,8 +2,9 @@
 // Objectif : savoir en 2 secondes s'il reste de l'argent, voir un
 // dépassement sans le chercher.
 
-import { categories, expenses, monthlyBudgets, settings } from '../db.js';
-import { summarizeMonth, planMonth } from '../budget.js';
+import { categories, expenses, monthlyBudgets, monthlyPlan, settings } from '../db.js';
+import { summarizeMonth, planMonth, sumAmounts } from '../budget.js';
+import { materializeMonth } from '../recurring.js';
 import { formatEuros, formatEurosCompact } from '../money.js';
 import { onSyncStatus, statusLabel, getStatus as getSyncStatus } from '../sync.js';
 
@@ -18,32 +19,46 @@ const LEVEL_LABEL = {
 export async function render(root, app) {
   const { year, month } = app.state;
 
-  const [cats, monthExpenses, budgets, cfg] = await Promise.all([
+  // Les charges fixes du mois sont créées avant toute lecture : sinon le
+  // premier affichage du mois montrerait un « reste » qui ignore le loyer.
+  await materializeMonth(year, month);
+
+  const [cats, monthEntries, budgets, monthPlan, cfg] = await Promise.all([
     categories.active(),
     expenses.forMonth(year, month),
     monthlyBudgets.ensure(year, month),
+    monthlyPlan.ensure(year, month),
     settings.get(),
   ]);
 
-  const budgetMap = new Map(budgets.map((b) => [b.categoryId, b.amount]));
-  const income = cfg?.monthlyIncome ?? 0;
+  // Les rentrées d'argent (remboursement, prime) ne sont pas des dépenses :
+  // elles gonflent le revenu du mois, jamais un budget de catégorie.
+  const spends = monthEntries.filter((e) => e.kind !== 'income');
+  const extraIncome = sumAmounts(monthEntries.filter((e) => e.kind === 'income'));
+  const fixedSpent = sumAmounts(spends.filter((e) => e.fixed));
+  const variableSpent = sumAmounts(spends.filter((e) => !e.fixed));
 
+  const income = (monthPlan?.income ?? 0) + extraIncome;
+
+  const budgetMap = new Map(budgets.map((b) => [b.categoryId, b.amount]));
   const summary = summarizeMonth({
     categories: cats,
     budgetForCategory: (id) => budgetMap.get(id) ?? 0,
-    expenses: monthExpenses,
+    expenses: spends,
     income,
   });
 
-  // Le plan : ce que devient le revenu une fois l'épargne réservée.
+  // Le plan : ce que devient le revenu une fois l'épargne réservée et les
+  // charges fixes déduites.
   const now = new Date();
   const isCurrent = year === now.getFullYear() && month === now.getMonth() + 1;
   const daysInMonth = new Date(year, month, 0).getDate();
   const plan = planMonth({
     income,
-    savingsTarget: cfg?.savingsTarget ?? 0,
+    savingsTarget: monthPlan?.savingsTarget ?? 0,
     totalBudget: summary.totalBudget,
-    totalSpent: summary.totalSpent,
+    fixedSpent,
+    variableSpent,
     dayOfMonth: isCurrent ? now.getDate() : null,
     daysInMonth,
   });
@@ -57,25 +72,31 @@ export async function render(root, app) {
       </div>
       <div class="head-right">
         <span id="sync-chip" class="sync-chip" hidden></span>
-        <button class="icon-btn" data-act="settings" aria-label="Réglages">⚙️</button>
       </div>
     </header>
+
+    ${app.offMonthBanner()}
 
     <div id="alert-slot"></div>
 
     ${planCard(plan, summary)}
 
+    ${extraIncome > 0 ? `
+      <p class="muted center mb-4">
+        + ${formatEuros(extraIncome)} de rentrées ce mois (remboursements, primes)
+      </p>` : ''}
+
     <div class="cat-list">
       ${summary.categories.map((c) => catCard(c)).join('')}
     </div>
 
-    ${spendingChart(monthExpenses, summary.totalBudget, year, month)}
+    ${spendingChart(spends, plan, year, month)}
 
     <div id="backup-slot"></div>
   `;
 
-  // Alerte prioritaire : Restau/livraison à ≥ 75 %.
-  renderRestauAlert(root.querySelector('#alert-slot'), summary);
+  // Alerte prioritaire sur les catégories surveillées.
+  renderWatchAlerts(root.querySelector('#alert-slot'), summary);
 
   // Rappel de sauvegarde discret (> 30 jours sans export), masqué si la
   // synchronisation GitHub s'en charge déjà.
@@ -87,7 +108,7 @@ export async function render(root, app) {
   // Événements.
   root.querySelector('[data-act="prev"]').addEventListener('click', () => app.shiftMonth(-1));
   root.querySelector('[data-act="next"]').addEventListener('click', () => app.shiftMonth(1));
-  root.querySelector('[data-act="settings"]').addEventListener('click', () => app.navigate('settings'));
+  app.bindOffMonthBanner(root);
   root.querySelector('[data-act="set-income"]')
     ?.addEventListener('click', () => app.navigate('settings'));
 }
@@ -136,13 +157,17 @@ function planCard(plan, summary) {
       <div class="sub">${perDayLine}</div>
 
       <div class="plan-bar" role="img"
-           aria-label="${formatEuros(seg.spent)} dépensés, ${formatEuros(seg.left)} restants, ${formatEuros(seg.savings)} d'épargne sur ${formatEuros(plan.income)}">
+           aria-label="Sur ${formatEuros(plan.income)} : ${formatEuros(seg.fixed)} de charges fixes, ${formatEuros(seg.spent)} dépensés, ${formatEuros(seg.left)} restants, ${formatEuros(seg.savings)} d'épargne">
+        <span class="seg seg-fixed" style="width:${pct(seg.fixed).toFixed(2)}%"></span>
         <span class="seg seg-spent" style="width:${pct(seg.spent).toFixed(2)}%"></span>
         <span class="seg seg-left" style="width:${pct(seg.left).toFixed(2)}%"></span>
         <span class="seg seg-savings" style="width:${pct(seg.savings).toFixed(2)}%"></span>
       </div>
 
       <ul class="plan-legend">
+        ${seg.fixed > 0
+          ? `<li><i class="dot seg-fixed"></i>Charges<b>${formatEuros(seg.fixed)}</b></li>`
+          : ''}
         <li><i class="dot seg-spent"></i>Dépensé<b>${formatEuros(seg.spent)}</b></li>
         <li><i class="dot seg-left"></i>Reste<b>${formatEuros(seg.left)}</b></li>
         <li><i class="dot seg-savings"></i>Épargne<b>${formatEuros(seg.savings)}</b></li>
@@ -158,6 +183,14 @@ function planCard(plan, summary) {
 function planVerdict(plan) {
   const target = formatEuros(plan.savingsTarget);
   switch (plan.status) {
+    case 'fixed-overrun':
+      return {
+        icon: '🚨',
+        stateClass: 'state-red',
+        text: `Tes charges fixes (${formatEuros(plan.fixedSpent)}) dépassent à elles `
+          + `seules ce que tu peux dépenser. Aucun arbitrage quotidien ne rattrapera `
+          + `ça — c'est le loyer, les abonnements ou l'objectif d'épargne qu'il faut revoir.`,
+      };
     case 'over-income':
       return {
         icon: '🚨',
@@ -270,20 +303,30 @@ function catCard(c) {
     </article>`;
 }
 
-function renderRestauAlert(slot, summary) {
-  const restau = summary.categories.find((c) => c.category.name === 'Restau/livraison');
-  if (!restau || restau.budget <= 0) return;
-  if (restau.spent / restau.budget < 0.75) return;
+// Alertes des catégories surveillées (drapeau `watch` sur la catégorie).
+//
+// Avant, cette alerte cherchait la catégorie par son nom exact
+// « Restau/livraison ». Les réglages permettant de renommer une catégorie,
+// la renommer éteignait l'alerte définitivement — sans message ni erreur.
+// Le drapeau suit la catégorie quel que soit son nom.
+function renderWatchAlerts(slot, summary) {
+  const watched = summary.categories
+    .filter((c) => c.category.watch && c.budget > 0 && c.spent / c.budget >= 0.75)
+    .sort((a, b) => b.ratio - a.ratio);
 
-  const over = restau.over > 0;
-  slot.innerHTML = `
-    <div class="alert-banner ${over ? 'is-red' : ''}" role="alert">
-      <span class="ico" aria-hidden="true">${over ? '🚨' : '⚠️'}</span>
-      <span>
-        Restau/livraison : ${formatEuros(restau.spent)} sur ${formatEuros(restau.budget)}
-        ${over ? `— dépassé de ${formatEuros(restau.over)}` : '— attention, budget presque atteint'}
-      </span>
-    </div>`;
+  if (watched.length === 0) return;
+
+  slot.innerHTML = watched.map((c) => {
+    const over = c.over > 0;
+    return `
+      <div class="alert-banner ${over ? 'is-red' : ''}" role="alert">
+        <span class="ico" aria-hidden="true">${over ? '🚨' : '⚠️'}</span>
+        <span>
+          ${escapeHtml(c.category.name)} : ${formatEuros(c.spent)} sur ${formatEuros(c.budget)}
+          ${over ? `— dépassé de ${formatEuros(c.over)}` : '— attention, budget presque atteint'}
+        </span>
+      </div>`;
+  }).join('');
 }
 
 function renderBackupNudge(slot, cfg, app) {
@@ -308,16 +351,26 @@ function renderBackupNudge(slot, cfg, app) {
   slot.querySelector('[data-act="backup"]').addEventListener('click', () => app.navigate('settings'));
 }
 
-// Graphe mensuel léger : dépense cumulée du mois vs. rythme idéal du budget.
+// Graphe mensuel léger : dépense cumulée du mois vs. rythme idéal.
 // SVG pur, aucune bibliothèque. La ligne cumulée est tracée dans l'accent
 // (neutre) ; le vert/orange/rouge reste réservé au libellé d'état.
-function spendingChart(monthExpenses, totalBudget, year, month) {
+//
+// ── Les charges fixes sont EXCLUES, des deux côtés ─────────────────────────
+// Le loyer tombe le 2 : en le comptant, le cumul décollait d'un coup au-dessus
+// d'une ligne « idéale » linéaire, et l'app annonçait « plus vite que le
+// budget » tous les mois pendant deux semaines. Une alerte qui se déclenche à
+// tort systématiquement finit ignorée — donc inutile le jour où elle a raison.
+// On compare ce qui se compare : le variable, seul poste où le rythme a un
+// sens puisque c'est le seul sur lequel on décide au jour le jour.
+function spendingChart(spends, plan, year, month) {
   const daysInMonth = new Date(year, month, 0).getDate();
+  const variableExpenses = spends.filter((e) => !e.fixed);
+  const target = Math.max(plan.variableSpendable, 0);
 
   // Cumul par jour.
   const cumul = new Array(daysInMonth + 1).fill(0);
   const perDay = new Array(daysInMonth + 1).fill(0);
-  for (const e of monthExpenses) {
+  for (const e of variableExpenses) {
     const d = Number(e.date.slice(8, 10));
     if (d >= 1 && d <= daysInMonth) perDay[d] += e.amount;
   }
@@ -338,7 +391,7 @@ function spendingChart(monthExpenses, totalBudget, year, month) {
   const innerW = W - padL - padR;
   const innerH = H - padT - padB;
 
-  const maxY = Math.max(totalBudget, cumul[daysInMonth], 1) * 1.08;
+  const maxY = Math.max(target, cumul[daysInMonth], 1) * 1.08;
   const x = (day) => padL + ((day - 1) / (daysInMonth - 1)) * innerW;
   const y = (v) => padT + (1 - v / maxY) * innerH;
   const yBase = y(0);
@@ -351,10 +404,10 @@ function spendingChart(monthExpenses, totalBudget, year, month) {
     ? `M${x(1).toFixed(1)},${yBase.toFixed(1)} L${pts.join(' L')} L${x(lastDay).toFixed(1)},${yBase.toFixed(1)} Z`
     : '';
 
-  // Ligne de rythme idéal (0 → budget total sur le mois).
-  const paceLine = totalBudget > 0
+  // Ligne de rythme idéal (0 → enveloppe variable, étalée sur le mois).
+  const paceLine = target > 0
     ? `<line x1="${x(1).toFixed(1)}" y1="${yBase.toFixed(1)}"
-             x2="${x(daysInMonth).toFixed(1)}" y2="${y(totalBudget).toFixed(1)}"
+             x2="${x(daysInMonth).toFixed(1)}" y2="${y(target).toFixed(1)}"
              stroke="var(--text-faint)" stroke-width="1.5"
              stroke-dasharray="3 3" fill="none" />`
     : '';
@@ -369,13 +422,14 @@ function spendingChart(monthExpenses, totalBudget, year, month) {
 
   // Légende d'état (texte + couleur, jamais couleur seule).
   const { caption, stateClass, icon } = chartCaption({
-    cumulNow: cumul[lastDay], totalBudget, lastDay, daysInMonth, isCurrent,
+    cumulNow: cumul[lastDay], target, lastDay, daysInMonth, isCurrent,
   });
 
   return `
     <section class="card spend-chart">
-      <div class="chart-title">Rythme du mois</div>
-      <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Dépense cumulée du mois">
+      <div class="chart-title">Rythme du mois <span class="muted">— hors charges fixes</span></div>
+      <svg viewBox="0 0 ${W} ${H}" role="img"
+           aria-label="Dépenses variables cumulées du mois">
         <line x1="${padL}" y1="${yBase.toFixed(1)}" x2="${W - padR}" y2="${yBase.toFixed(1)}"
               stroke="var(--border)" stroke-width="1" />
         ${paceLine}
@@ -391,32 +445,36 @@ function spendingChart(monthExpenses, totalBudget, year, month) {
         <span aria-hidden="true">${icon}</span><span>${caption}</span>
       </div>
       <div class="chart-legend">
-        <span><span class="swatch" style="background:var(--accent)"></span>Dépensé</span>
-        ${totalBudget > 0
-          ? '<span><span class="swatch" style="background:var(--text-faint)"></span>Rythme du budget</span>'
+        <span><span class="swatch" style="background:var(--accent)"></span>Dépenses variables</span>
+        ${target > 0
+          ? '<span><span class="swatch" style="background:var(--text-faint)"></span>Rythme cible</span>'
           : ''}
       </div>
     </section>`;
 }
 
-function chartCaption({ cumulNow, totalBudget, lastDay, daysInMonth, isCurrent }) {
-  if (totalBudget <= 0) {
-    return { caption: 'Aucun budget défini ce mois-ci.', stateClass: 'state-neutral', icon: '•' };
+function chartCaption({ cumulNow, target, lastDay, daysInMonth, isCurrent }) {
+  if (target <= 0) {
+    return {
+      caption: "Aucune enveloppe variable ce mois-ci (revenu ou charges à renseigner).",
+      stateClass: 'state-neutral',
+      icon: '•',
+    };
   }
   if (!isCurrent) {
-    const over = cumulNow > totalBudget;
+    const over = cumulNow > target;
     return {
-      caption: `${formatEuros(cumulNow)} dépensés sur ${formatEuros(totalBudget)} de budget.`,
+      caption: `${formatEuros(cumulNow)} de variable sur ${formatEuros(target)} disponibles.`,
       stateClass: over ? 'state-red' : 'state-green',
       icon: over ? '↑' : '✓',
     };
   }
   // Mois courant : cumul réel vs. rythme attendu à cette date.
-  const pace = totalBudget * (lastDay / daysInMonth);
+  const pace = target * (lastDay / daysInMonth);
   const projected = cumulNow / (lastDay / daysInMonth); // extrapolation fin de mois
   if (cumulNow > pace * 1.05) {
     return {
-      caption: `Plus vite que le budget — à ce rythme, ~${formatEuros(projected)} en fin de mois.`,
+      caption: `Plus vite que prévu — à ce rythme, ~${formatEuros(projected)} de variable en fin de mois.`,
       stateClass: 'state-orange',
       icon: '↑',
     };
@@ -424,7 +482,7 @@ function chartCaption({ cumulNow, totalBudget, lastDay, daysInMonth, isCurrent }
   if (cumulNow < pace * 0.95) {
     return { caption: 'En dessous du rythme prévu. Marge confortable.', stateClass: 'state-green', icon: '↓' };
   }
-  return { caption: 'Dans le rythme du budget.', stateClass: 'state-neutral', icon: '→' };
+  return { caption: 'Dans le rythme.', stateClass: 'state-neutral', icon: '→' };
 }
 
 // Teinte douce à partir d'une couleur de catégorie (fond d'icône).

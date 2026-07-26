@@ -66,25 +66,38 @@ a,
   z-index: 20;
 }
 
+/* 5 entrées sur les 390 pt de large d'un iPhone 14 : ~78 pt chacune. Le
+ * libellé descend à 10 px et ne se coupe jamais — « Historique » y tient. */
 .tabbar button {
   flex: 1;
+  min-width: 0;
   min-height: var(--touch);
   border: none;
   background: none;
   color: var(--text-faint);
-  font-size: var(--fs-xs);
+  font-size: 10px;
+  line-height: 1.2;
+  white-space: nowrap;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 3px;
   cursor: pointer;
-  padding: var(--sp-2) 0;
+  padding: var(--sp-2) 2px;
+  -webkit-tap-highlight-color: transparent;
 }
 
 .tabbar button .ico {
-  font-size: 22px;
-  line-height: 1;
+  line-height: 0;
+}
+
+/* Les SVG héritent de currentColor : l'état actif et le thème sombre sont
+ * gérés par la seule couleur du bouton. */
+.tabbar button .ico svg {
+  width: 23px;
+  height: 23px;
+  display: block;
 }
 
 .tabbar button[aria-current="true"] {
@@ -92,7 +105,8 @@ a,
   font-weight: 600;
 }
 
-/* Le bouton central « Ajouter » se démarque légèrement. */
+/* Le bouton central « Ajouter » se démarque. Sans libellé, la pastille de
+ * 44 px (cible tactile recommandée) tient dans la hauteur de barre. */
 .tabbar button.tab-add .ico {
   width: 44px;
   height: 44px;
@@ -102,8 +116,22 @@ a,
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 26px;
-  margin-bottom: 1px;
+  box-shadow: 0 2px 8px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+
+.tabbar button.tab-add .ico svg {
+  width: 24px;
+  height: 24px;
+}
+
+.tabbar button.tab-add:active .ico {
+  transform: scale(0.94);
+}
+
+/* Le pictogramme reste blanc sur l'accent même quand l'onglet est actif. */
+.tabbar button.tab-add[aria-current="true"] .ico {
+  background: var(--accent-strong);
+  color: var(--on-accent);
 }
 
 /* --------------------------------------------------------------- En-têtes */
@@ -186,6 +214,41 @@ a,
 
 .alert-banner .ico {
   font-size: 20px;
+}
+
+/* Bandeau « tu n'es pas sur le mois en cours ».
+ * Les budgets et le revenu sont mensuels : éditer août en croyant éditer
+ * juillet donne l'impression que tout a disparu. Volontairement en accent et
+ * non en couleur d'état — c'est un repère de navigation, pas une alerte. */
+.month-flag {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  margin-bottom: var(--sp-4);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, transparent);
+  font-size: var(--fs-sm);
+}
+
+.month-flag span {
+  flex: 1;
+}
+
+.month-flag button {
+  flex: none;
+  min-height: 32px;
+  padding: 0 var(--sp-3);
+  border: none;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: capitalize;
+  cursor: pointer;
 }
 
 /* Rappel discret de sauvegarde. */
@@ -283,6 +346,9 @@ a,
   box-shadow: inset 1px 0 0 var(--surface);
 }
 
+/* Charges fixes : même famille que « dépensé » (c'est de l'argent sorti) mais
+ * plus sombre — elles ne se décident pas au jour le jour. */
+.seg-fixed { background: var(--accent-strong); }
 .seg-spent { background: var(--accent); }
 .seg-left { background: color-mix(in srgb, var(--accent) 26%, var(--surface-2)); }
 .seg-savings { background: var(--state-green); }
@@ -951,7 +1017,9 @@ textarea {
   margin-top: var(--sp-4);
 }
 
-.spend-chart .chart-title {
+/* Titre / légende partagés par le graphe de rythme et l'écran Bilan —
+ * volontairement dégroupés de .spend-chart pour être réutilisables. */
+.chart-title {
   font-size: var(--fs-sm);
   font-weight: 600;
   color: var(--text-muted);
@@ -973,25 +1041,188 @@ textarea {
   gap: var(--sp-2);
 }
 
-.spend-chart .chart-legend {
+.chart-legend {
   display: flex;
-  gap: var(--sp-4);
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--sp-1) var(--sp-4);
   margin-top: var(--sp-2);
   font-size: var(--fs-xs);
   color: var(--text-faint);
 }
 
-.spend-chart .chart-legend span {
+.chart-legend span {
   display: inline-flex;
   align-items: center;
   gap: var(--sp-1);
 }
 
-.spend-chart .swatch {
+.swatch {
   width: 14px;
   height: 3px;
   border-radius: 2px;
   display: inline-block;
+  flex: none;
+}
+
+/* Repère d'objectif : tireté, pour ne pas se lire comme une série pleine. */
+.swatch-line {
+  height: 0;
+  border-top: 2px dashed var(--text-faint);
+  border-radius: 0;
+}
+
+/* ------------------------------------------------- Dépense ou rentrée ----- */
+
+.kind-toggle {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  margin-bottom: var(--sp-4);
+}
+
+.kind-toggle button {
+  flex: 1;
+  min-height: 38px;
+  border: none;
+  border-radius: calc(var(--radius) - 3px);
+  background: none;
+  color: var(--text-muted);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.kind-toggle button[aria-pressed="true"] {
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+/* Une rentrée se lit d'un coup d'œil dans l'historique. */
+.exp-row .exp-amount.is-income {
+  color: var(--state-green);
+}
+
+/* ---------------------------------------------------------------- Bilan --- */
+
+.head-title {
+  font-size: var(--fs-lg);
+  font-weight: 700;
+  margin: 0;
+}
+
+.bilan-card {
+  padding: var(--sp-4);
+}
+
+/* Épargne réalisée : une colonne par mois. Barres verticales plutôt qu'une
+ * courbe — on compare six valeurs discrètes, pas une évolution continue. */
+.savings-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+}
+
+.sb-col {
+  flex: 1;
+  min-width: 0;
+  text-align: center;
+}
+
+.sb-track {
+  position: relative;
+  height: 96px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+
+.sb-fill {
+  display: block;
+  width: 100%;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  transition: height 0.3s ease;
+}
+
+.sb-fill.is-hit { background: var(--state-green); }
+.sb-fill.is-miss { background: var(--accent); }
+.sb-fill.is-neg { background: var(--state-red); }
+
+/* Repère d'objectif, superposé à la barre. */
+.sb-target {
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 2px dashed var(--text-faint);
+  z-index: 1;
+}
+
+.sb-label {
+  margin-top: var(--sp-1);
+  font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+
+.sb-value {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Comparaison par catégorie. */
+.bilan-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.bilan-list li {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-3) 0;
+  border-top: 1px solid var(--border);
+}
+
+.bilan-list li:first-child {
+  border-top: none;
+}
+
+.bl-icon {
+  font-size: 18px;
+  flex: none;
+}
+
+.bl-name {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+}
+
+.bl-amount {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.bl-trend {
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  white-space: nowrap;
+  min-width: 5.5ch;
+  text-align: right;
 }
 
 /* --------------------------------------------------------------- Toast --- */

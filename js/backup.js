@@ -66,6 +66,18 @@ export function parseBackup(text) {
     throw new Error("Ce fichier n'est pas une sauvegarde Comptes Clairs.");
   }
   const d = obj.data;
+
+  // Garde-fou : restaurer VIDE les stores avant de les repeupler. Une
+  // sauvegarde sans catégories effacerait donc tout sans rien remettre —
+  // et une base sans catégories n'est pas un état valide, c'est un accident
+  // (export interrompu, fichier tronqué, poussé pendant un premier
+  // lancement). On refuse plutôt que d'appliquer la destruction.
+  if (!Array.isArray(d.categories) || d.categories.length === 0) {
+    throw new Error(
+      'Sauvegarde inutilisable : elle ne contient aucune catégorie. '
+      + 'Restaurer effacerait tes données sans rien remettre — annulé.',
+    );
+  }
   return {
     data: d,
     exportedAt: typeof obj.exportedAt === 'number' ? obj.exportedAt : null,

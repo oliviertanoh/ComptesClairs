@@ -84,7 +84,7 @@ function renderList(listEl, rows, catById, app) {
     <section class="day-group">
       <div class="day-head">
         <span class="day-label">${dayLabel(date)}</span>
-        <span class="day-total">${formatEuros(sumAmounts(items))}</span>
+        <span class="day-total">${formatEuros(dayTotal(items))}</span>
       </div>
       ${items.map((e) => expenseRow(e, catById)).join('')}
     </section>
@@ -93,18 +93,34 @@ function renderList(listEl, rows, catById, app) {
   wireRows(listEl, app);
 }
 
+// Total du jour = ce qui est SORTI. Une rentrée du même jour ne vient pas
+// diminuer le total dépensé (ce sont deux mouvements distincts), elle
+// s'affiche sur sa propre ligne.
+function dayTotal(items) {
+  return sumAmounts(items.filter((e) => e.kind !== 'income'));
+}
+
 function expenseRow(e, catById) {
   const cat = catById.get(e.categoryId);
+  const isIncome = e.kind === 'income';
+  const isFixed = Boolean(e.fixed);
+
+  const sub = isIncome
+    ? 'Rentrée'
+    : `${cat ? escapeHtml(cat.name) : ''}${isFixed ? ' · charge fixe' : ''}`;
+
   return `
     <div class="exp-row" data-id="${e.id}">
       <button class="exp-delete" data-act="delete" aria-label="Supprimer">Supprimer</button>
       <div class="exp-body" role="button" tabindex="0">
-        <div class="exp-icon">${cat ? cat.icon : '❓'}</div>
+        <div class="exp-icon">${isIncome ? '💸' : (isFixed ? '🔁' : (cat ? cat.icon : '❓'))}</div>
         <div class="exp-main">
           <div class="exp-label">${escapeHtml(e.label || '—')}</div>
-          <div class="exp-sub">${cat ? escapeHtml(cat.name) : ''}${e.note ? ' · ' + escapeHtml(e.note) : ''}</div>
+          <div class="exp-sub">${sub}${e.note ? ' · ' + escapeHtml(e.note) : ''}</div>
         </div>
-        <div class="exp-amount">${formatEuros(e.amount)}</div>
+        <div class="exp-amount ${isIncome ? 'is-income' : ''}">
+          ${isIncome ? '+ ' : ''}${formatEuros(e.amount)}
+        </div>
       </div>
     </div>`;
 }

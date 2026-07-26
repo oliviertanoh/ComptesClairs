@@ -12,10 +12,12 @@ import { categories, merchants, monthlyBudgets, settings, uuid } from './db.js';
 // Budgets à 0 : ce dépôt est public (GitHub Pages), on n'y met AUCUN chiffre
 // personnel. Tu définis tes vrais budgets dans Réglages, au premier lancement ;
 // ils restent dans l'IndexedDB de ton téléphone et ne quittent jamais l'appareil.
+// `watch: true` = alerte sur l'accueil dès 75 % du budget. C'est un drapeau,
+// pas un nom en dur : renommer la catégorie n'éteint pas son alerte.
 const CATEGORY_SEED = [
   { key: 'fixed', name: 'Charges fixes', monthlyBudget: 0, color: '#5B6B7B', icon: '🏠' },
   { key: 'courses', name: 'Courses', monthlyBudget: 0, color: '#4E7A6E', icon: '🛒' },
-  { key: 'restau', name: 'Restau/livraison', monthlyBudget: 0, color: '#8A6D5B', icon: '🍔' },
+  { key: 'restau', name: 'Restau/livraison', monthlyBudget: 0, color: '#8A6D5B', icon: '🍔', watch: true },
   { key: 'transport', name: 'Transport', monthlyBudget: 0, color: '#4A6591', icon: '🚊' },
   { key: 'loisirs', name: 'Loisirs/vêtements', monthlyBudget: 0, color: '#7A5B84', icon: '👕' },
   { key: 'imprevus', name: 'Imprévus', monthlyBudget: 0, color: '#7C6E4E', icon: '⚠️' },
@@ -118,6 +120,7 @@ export async function seedIfEmpty({ year, month }) {
       icon: c.icon,
       sortOrder: i,
       archived: false,
+      watch: c.watch ?? false,
     };
   });
   await categories.bulkPut(catRecords);

@@ -10,12 +10,14 @@ import { initSync, syncOnBoot, getConfig, isConfigured } from './sync.js';
 import * as monthView from './views/month.js';
 import * as addView from './views/add.js';
 import * as historyView from './views/history.js';
+import * as bilanView from './views/bilan.js';
 import * as settingsView from './views/settings.js';
 
 const ROUTES = {
   month: monthView,
   add: addView,
   history: historyView,
+  bilan: bilanView,
   settings: settingsView,
 };
 
@@ -53,6 +55,35 @@ const app = {
   isCurrentMonth() {
     const n = new Date();
     return state.year === n.getFullYear() && state.month === n.getMonth() + 1;
+  },
+
+  /** Revient au mois en cours et rafraîchit. */
+  goToCurrentMonth() {
+    const n = new Date();
+    state.year = n.getFullYear();
+    state.month = n.getMonth() + 1;
+    this.refresh();
+  },
+
+  /**
+   * Bandeau affiché dès qu'on n'est PAS sur le mois en cours. Les budgets
+   * étant enregistrés par mois, éditer août en croyant éditer juillet donne
+   * l'impression que tout a disparu — le libellé seul ne suffisait pas.
+   */
+  offMonthBanner() {
+    if (this.isCurrentMonth()) return '';
+    const n = new Date();
+    return `
+      <div class="month-flag">
+        <span>Tu consultes <strong>${this.monthLabel()}</strong>, pas le mois en cours.</span>
+        <button data-act="today">${this.monthLabel(n.getFullYear(), n.getMonth() + 1)}</button>
+      </div>`;
+  },
+
+  /** Branche le bouton du bandeau ci-dessus, s'il est présent. */
+  bindOffMonthBanner(root) {
+    root.querySelector('.month-flag [data-act="today"]')
+      ?.addEventListener('click', () => this.goToCurrentMonth());
   },
 
   /** Change le mois affiché de ±1 et rafraîchit. */
@@ -339,4 +370,25 @@ async function boot() {
   }
 }
 
-boot();
+// `boot()` est asynchrone : sans ce catch, la moindre erreur au démarrage
+// laissait « Chargement… » à l'écran indéfiniment, sans le moindre indice.
+// Un écran qui ne finit pas de charger est le pire des messages d'erreur.
+boot().catch((err) => {
+  console.error('Démarrage impossible', err);
+  viewEl.innerHTML = `
+    <div class="empty">
+      <span class="emoji">⚠️</span>
+      <h1 style="margin:0 0 var(--sp-2)">Démarrage impossible</h1>
+      <p class="muted">${escapeText(err?.message || String(err))}</p>
+      <div class="stack mt-4" style="max-width:320px;margin-inline:auto">
+        <button class="btn btn-primary btn-block" id="boot-retry">Réessayer</button>
+      </div>
+    </div>`;
+  viewEl.querySelector('#boot-retry').addEventListener('click', () => location.reload());
+});
+
+function escapeText(s) {
+  return String(s).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]));
+}

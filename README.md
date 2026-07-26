@@ -137,23 +137,85 @@ revient.
 
 ## Le plan du mois
 
-`monthlyIncome` et `savingsTarget` (Réglages → Revenus) pilotent la carte
-d'accueil. L'épargne est réservée **en premier**, pas avec ce qui reste :
+Le revenu et l'objectif d'épargne sont enregistrés **par mois**
+(store `monthlyPlan`), pas seulement dans les réglages : un mois à 1 800 € et
+le suivant à 2 100 € restent tous deux justes, et le Bilan calcule l'épargne
+passée avec le revenu d'alors. Les réglages servent de valeur par défaut.
+
+L'épargne est réservée **en premier**, et les charges fixes déduites en
+entier — qu'elles soient déjà prélevées ou non :
 
 ```text
-spendable    = revenu − objectif d'épargne
-leftToSpend  = spendable − dépensé        ← le chiffre affiché en grand
-perDay       = leftToSpend / jours restants
+spendable          = revenu − objectif d'épargne
+variableSpendable  = spendable − charges fixes du mois
+leftToSpend        = variableSpendable − dépenses variables  ← le grand chiffre
+perDay             = leftToSpend / jours restants
 ```
 
-La barre découpe le revenu en trois segments qui somment toujours à 100 % :
-**dépensé | reste à dépenser | épargne**. Quand on mord sur l'épargne, c'est
-son segment qui rétrécit — le dégât se voit sans rien lire.
+La barre découpe le revenu en quatre segments qui somment toujours à 100 % :
+**charges | dépensé | reste | épargne**. Quand on mord sur l'épargne, c'est son
+segment qui rétrécit — le dégât se voit sans rien lire.
 
-Une note séparée compare la **somme des budgets par catégorie** à `spendable` :
-si les budgets dépassent, le plan est intenable dès le 1er du mois, avant la
-moindre dépense. Toute cette logique est pure et testée (`planMonth` dans
-`budget.js`).
+Une note compare la **somme des budgets par catégorie** à `spendable` : si les
+budgets dépassent, le plan est intenable dès le 1er du mois. Un statut à part,
+`fixed-overrun`, signale le cas où les charges fixes seules épuisent
+l'enveloppe — aucun arbitrage quotidien ne peut le rattraper.
+
+Toute cette logique est pure et testée (`planMonth` dans `budget.js`).
+
+---
+
+## Charges fixes
+
+Une règle (`store recurring`) décrit une charge qui retombe chaque mois :
+libellé, montant, catégorie, jour. L'app crée la dépense correspondante à
+l'ouverture du mois, marquée `fixed: true` et rattachée à la règle
+(`recurringId`).
+
+**Idempotence :** chaque règle garde la liste des mois déjà générés
+(`materialized`). Rouvrir dix fois le même mois ne crée pas dix loyers, et
+supprimer une occasion à la main ne la fait pas réapparaître. Un identifiant
+déterministe seul n'aurait donné que la première garantie.
+
+Un jour 29/30/31 est ramené au dernier jour des mois plus courts. Une règle
+créée aujourd'hui ne rétroagit pas sur les mois passés (`startMonth`).
+
+Depuis l'historique, ouvrir une dépense propose **« Celle-ci revient chaque
+mois »** : la règle est créée et le mois d'origine marqué comme déjà traité,
+pour ne pas dupliquer la dépense de départ.
+
+> **Le graphe de rythme exclut les charges fixes, des deux côtés.** Le loyer
+> tombe le 2 : en le comptant, le cumul décollait au-dessus d'une ligne idéale
+> linéaire et l'app annonçait « plus vite que le budget » tous les mois pendant
+> deux semaines. Une alerte qui se déclenche à tort systématiquement finit
+> ignorée — donc inutile le jour où elle a raison.
+
+---
+
+## Rentrées d'argent
+
+Une opération porte un `kind` : `'expense'` (défaut) ou `'income'`. Une rentrée
+— remboursement d'un ami, prime, vente — n'entame **aucun budget de
+catégorie** : elle s'ajoute au revenu du mois. Sans ça, avancer 60 € au restau
+pour quatre personnes comptait comme 60 € dépensés.
+
+---
+
+## Écran Bilan
+
+Répond aux deux questions qu'aucun autre écran ne traitait :
+
+- **« 340 € en restau, c'est beaucoup ? »** — comparaison à la moyenne des
+  3 mois précédents, par catégorie. Un mois sans dépense dans la catégorie
+  compte comme 0 : l'ignorer gonflerait la référence.
+- **« est-ce que je tiens mon objectif dans la durée ? »** — épargne réellement
+  réalisée sur 6 mois, avec le repère d'objectif de chaque mois.
+
+Un mois sans revenu enregistré est **masqué** plutôt qu'affiché à −dépensé :
+on ignore combien il est rentré, et une barre rouge pleine serait un mensonge.
+
+`trend()` ne qualifie une variation de hausse/baisse qu'au-delà de **5 %** —
+en dessous, le bruit d'un mois à l'autre ne veut rien dire.
 
 ---
 
@@ -177,7 +239,8 @@ js/
   csv.js              export / import
   backup.js           sauvegarde complète JSON (tous les stores)
   sync.js             synchronisation GitHub (API Contents, envoi auto)
-  views/              month, add, history, settings
+  recurring.js        charges fixes (règles + matérialisation idempotente)
+  views/              month, add, history, bilan, settings
 icons/                180, 192, 512, 512-maskable
 ```
 
@@ -194,6 +257,15 @@ icons/                180, 192, 512, 512-maskable
 - **Le jeton GitHub vit dans son propre store IndexedDB** (`sync`, base v2),
   précisément pour qu'`exportAll()` ne puisse pas le ramasser. Ne le déplace
   pas dans `settings` : il finirait publié dans le fichier de sauvegarde.
+- **Les migrations IndexedDB sont additives** : chaque `createObjectStore` est
+  gardé par `contains()`. Monter de version n'efface rien — en particulier pas
+  le jeton, qu'il ne faut donc jamais avoir à ressaisir.
+- **`watch` sur une catégorie** pilote l'alerte d'accueil. Avant, l'alerte
+  cherchait le nom exact `'Restau/livraison'` : renommer la catégorie
+  l'éteignait définitivement, sans message ni erreur.
+- **Tout nouveau store doit être ajouté à `exportAll()` ET `importAll()`**,
+  sinon la synchro GitHub le perd en silence. `sync` est la seule exception
+  volontaire.
 - **Le service worker ne touche pas aux requêtes cross-origin** : servir une
   réponse de l'API GitHub depuis le cache produirait un faux conflit ou la
   restauration de données périmées.
