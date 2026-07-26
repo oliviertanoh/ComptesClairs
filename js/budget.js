@@ -90,6 +90,110 @@ export function remaining(income, totalSpent) {
 }
 
 /**
+ * Plan du mois : ce que devient le revenu une fois l'objectif d'épargne
+ * réservé. C'est le calcul qui manquait — `savingsTarget` était saisi puis
+ * jamais utilisé.
+ *
+ * Le raisonnement, dans l'ordre :
+ *   1. On met l'épargne de côté EN PREMIER (revenu − épargne = `spendable`),
+ *      pas avec ce qui reste à la fin. C'est la seule façon de tenir un
+ *      objectif.
+ *   2. `spendable` se compare à la somme des budgets par catégorie : si les
+ *      budgets dépassent, le plan est intenable AVANT même la 1re dépense
+ *      (`overcommitted`).
+ *   3. `leftToSpend` = ce qu'on peut encore sortir sans toucher à l'épargne.
+ *      C'est le chiffre du quotidien.
+ *
+ * La barre d'affichage découpe le revenu en 3 segments qui somment TOUJOURS
+ * à `income` (tant que income > 0) : dépensé | reste à dépenser | épargne.
+ * Quand on mord sur l'épargne, c'est le segment épargne qui rétrécit — donc
+ * la barre montre le dégât sans texte à lire.
+ *
+ * @param {Object} args
+ * @param {number} args.income revenu mensuel (centimes)
+ * @param {number} args.savingsTarget objectif d'épargne (centimes)
+ * @param {number} args.totalBudget somme des budgets par catégorie (centimes)
+ * @param {number} args.totalSpent total dépensé à ce jour (centimes)
+ * @param {number} [args.dayOfMonth] jour courant 1-31 (mois en cours seulement)
+ * @param {number} [args.daysInMonth] nombre de jours du mois
+ * @returns {{
+ *   income:number, savingsTarget:number, spendable:number, allocated:number,
+ *   unallocated:number, overcommitted:boolean, spent:number,
+ *   leftToSpend:number, savingsAtRisk:number, savingsReachable:number,
+ *   overIncome:number, daysLeft:number, perDay:number,
+ *   segments:{spent:number, left:number, savings:number},
+ *   status:'no-income'|'over-income'|'savings-hit'|'tight'|'ok'
+ * }}
+ */
+export function planMonth({
+  income = 0,
+  savingsTarget = 0,
+  totalBudget = 0,
+  totalSpent = 0,
+  dayOfMonth = null,
+  daysInMonth = 30,
+}) {
+  // Un objectif d'épargne supérieur au revenu n'a pas de sens : on le borne
+  // plutôt que de produire un `spendable` négatif qui contaminerait tout.
+  const target = clamp(savingsTarget, 0, Math.max(income, 0));
+  const spendable = Math.max(income - target, 0);
+
+  const allocated = totalBudget;
+  const unallocated = spendable - allocated;
+
+  const leftToSpend = spendable - totalSpent;
+
+  // Découpage de la barre. Les trois segments somment à `income`.
+  const segSpent = clamp(totalSpent, 0, income);
+  const segLeft = clamp(leftToSpend, 0, income - segSpent);
+  const segSavings = Math.max(income - segSpent - segLeft, 0);
+
+  // `segSavings` EST l'épargne encore atteignable : dès qu'on dépasse
+  // `spendable`, elle fond à la même vitesse que le dépassement.
+  const savingsReachable = segSavings;
+  const savingsAtRisk = Math.max(target - savingsReachable, 0);
+  const overIncome = Math.max(totalSpent - income, 0);
+
+  // Jours restants, aujourd'hui inclus (on peut encore dépenser aujourd'hui).
+  const daysLeft = dayOfMonth == null
+    ? 0
+    : clamp(daysInMonth - dayOfMonth + 1, 0, daysInMonth);
+  const perDay = daysLeft > 0 ? Math.round(leftToSpend / daysLeft) : 0;
+
+  return {
+    income,
+    savingsTarget: target,
+    spendable,
+    allocated,
+    unallocated,
+    overcommitted: allocated > spendable,
+    spent: totalSpent,
+    leftToSpend,
+    savingsAtRisk,
+    savingsReachable,
+    overIncome,
+    daysLeft,
+    perDay,
+    segments: { spent: segSpent, left: segLeft, savings: segSavings },
+    status: planStatus({ income, target, spendable, totalSpent, leftToSpend }),
+  };
+}
+
+function planStatus({ income, target, spendable, totalSpent, leftToSpend }) {
+  if (income <= 0) return 'no-income';
+  if (totalSpent > income) return 'over-income';
+  if (target > 0 && totalSpent > spendable) return 'savings-hit';
+  // Moins de 10 % de l'enveloppe restante : ça va se jouer serré.
+  if (spendable > 0 && leftToSpend < spendable * 0.10) return 'tight';
+  return 'ok';
+}
+
+function clamp(v, lo, hi) {
+  if (hi < lo) return lo;
+  return Math.min(Math.max(v, lo), hi);
+}
+
+/**
  * Synthèse complète d'un mois, prête à afficher. Ne fait aucune requête :
  * on lui passe les données déjà chargées.
  *

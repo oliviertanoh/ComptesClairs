@@ -249,6 +249,107 @@ a,
   max-width: 320px;
 }
 
+/* ------------------------------------------------------- Plan du mois ----- */
+/* Une seule barre = tout le revenu, découpé en trois. Les largeurs somment à
+ * 100 % (garanti côté JS par planMonth), donc la barre se lit comme une
+ * répartition, pas comme une jauge de remplissage.
+ *
+ * Couleurs : l'accent porte l'interface (dépensé / reste). Le vert est ici
+ * légitime malgré la règle « couleur = état de budget » — l'épargne EST un
+ * état d'objectif, et son segment rétrécit quand on mord dessus. Il reste
+ * toujours accompagné du mot « Épargne » dans la légende. */
+
+.plan-card {
+  padding-bottom: var(--sp-4);
+}
+
+.plan-bar {
+  display: flex;
+  height: 12px;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  background: var(--surface-2);
+  margin: var(--sp-4) auto var(--sp-3);
+  max-width: 320px;
+}
+
+.plan-bar .seg {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+
+/* Un liseré entre segments : deux teintes proches restent séparables. */
+.plan-bar .seg + .seg {
+  box-shadow: inset 1px 0 0 var(--surface);
+}
+
+.seg-spent { background: var(--accent); }
+.seg-left { background: color-mix(in srgb, var(--accent) 26%, var(--surface-2)); }
+.seg-savings { background: var(--state-green); }
+
+.plan-legend {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1) var(--sp-4);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+
+.plan-legend li {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.plan-legend b {
+  color: var(--text);
+  font-weight: 600;
+  margin-left: var(--sp-1);
+}
+
+.plan-legend .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex: none;
+}
+
+.plan-verdict {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--sp-2);
+  margin-top: var(--sp-4);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-align: left;
+  line-height: 1.35;
+}
+
+.plan-note {
+  margin-top: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--text-muted);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  text-align: left;
+}
+
+.plan-note.state-orange {
+  background: var(--state-orange-bg);
+  color: var(--state-orange);
+}
+
+.plan-note strong {
+  font-weight: 700;
+}
+
 /* ---------------------------------------------------------- Barres génér. */
 
 .bar {
@@ -743,6 +844,15 @@ textarea {
   text-align: right;
 }
 
+/* Une case à cocher ne doit pas hériter de la largeur des champs montants. */
+.list-row input[type="checkbox"] {
+  max-width: none;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  accent-color: var(--accent);
+}
+
 .list-row .archived-tag {
   font-size: var(--fs-xs);
   color: var(--text-faint);
@@ -762,6 +872,76 @@ textarea {
 
 .stack > * + * {
   margin-top: var(--sp-2);
+}
+
+/* ------------------------------------------------ Synchronisation GitHub -- */
+/* Principe : invisible quand tout va bien. La pastille de l'accueil ne
+ * s'affiche que s'il y a quelque chose à savoir (en attente, hors ligne,
+ * erreur, conflit) — un « tout va bien » permanent n'apprend rien. */
+
+.head-right {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-1);
+}
+
+.sync-chip {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  background: var(--surface-2);
+  color: var(--text-muted);
+  cursor: pointer;
+  flex: none;
+}
+
+.sync-chip.is-syncing { color: var(--accent); }
+.sync-chip.is-offline,
+.sync-chip.is-pending {
+  background: var(--state-neutral-bg);
+  color: var(--state-neutral);
+}
+.sync-chip.is-error,
+.sync-chip.is-conflict {
+  background: var(--state-red-bg);
+  color: var(--state-red);
+}
+
+/* Ligne d'état dans les réglages. */
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-4);
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.sync-status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  flex: none;
+}
+
+.sync-status.is-ok .dot,
+.sync-status.is-idle .dot { background: var(--state-green); }
+.sync-status.is-syncing .dot { background: var(--accent); }
+.sync-status.is-pending .dot,
+.sync-status.is-offline .dot { background: var(--state-orange); }
+.sync-status.is-error .dot,
+.sync-status.is-conflict .dot { background: var(--state-red); }
+
+.settings-section details > summary {
+  cursor: pointer;
+  padding: var(--sp-2) 0;
+  font-size: var(--fs-sm);
 }
 
 /* ---------------------------------------------------- Graphe mensuel ------ */

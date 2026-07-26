@@ -7,14 +7,20 @@ import {
 import { toCents, toInputValue, formatEuros } from '../money.js';
 import { buildCSV, downloadCSV, parseCSV } from '../csv.js';
 import { buildBackup, downloadBackup, parseBackup, restoreBackup } from '../backup.js';
+import {
+  getConfig as getSyncConfig, saveConfig as saveSyncConfig, disconnect as syncDisconnect,
+  testConnection, push as syncPush, pull as syncPull, isConfigured,
+  onSyncStatus, statusLabel, initSync,
+} from '../sync.js';
 
 export async function render(root, app) {
   const { year, month } = app.state;
-  const [cfg, cats, budgets, merchantList] = await Promise.all([
+  const [cfg, cats, budgets, merchantList, gh] = await Promise.all([
     settings.get(),
     categories.all(),
     monthlyBudgets.ensure(year, month),
     merchants.all(),
+    getSyncConfig(),
   ]);
 
   const active = cats.filter((c) => !c.archived).sort((a, b) => a.sortOrder - b.sortOrder);
@@ -70,6 +76,56 @@ export async function render(root, app) {
     </section>
 
     <section class="settings-section">
+      <h2>Synchronisation GitHub</h2>
+      <div class="sync-status" id="sync-status"><span class="dot"></span><span class="txt">…</span></div>
+
+      <div class="field"><label for="gh-owner">Compte GitHub</label>
+        <input id="gh-owner" type="text" autocapitalize="off" autocorrect="off"
+               spellcheck="false" placeholder="oliviertanoh"
+               value="${escapeAttr(gh.owner)}"></div>
+
+      <div class="field"><label for="gh-repo">Dépôt <span class="muted">(privé)</span></label>
+        <input id="gh-repo" type="text" autocapitalize="off" autocorrect="off"
+               spellcheck="false" placeholder="comptes-clairs-data"
+               value="${escapeAttr(gh.repo)}"></div>
+
+      <div class="field"><label for="gh-token">Jeton d'accès</label>
+        <input id="gh-token" type="password" autocapitalize="off" autocorrect="off"
+               spellcheck="false" autocomplete="off"
+               placeholder="${gh.token ? '•••••••• enregistré' : 'github_pat_…'}"></div>
+
+      <details class="mt-4">
+        <summary class="muted">Options avancées</summary>
+        <div class="field mt-4"><label for="gh-branch">Branche</label>
+          <input id="gh-branch" type="text" autocapitalize="off" spellcheck="false"
+                 value="${escapeAttr(gh.branch)}"></div>
+        <div class="field"><label for="gh-path">Fichier</label>
+          <input id="gh-path" type="text" autocapitalize="off" spellcheck="false"
+                 value="${escapeAttr(gh.path)}"></div>
+      </details>
+
+      <div class="list-row mt-4">
+        <span class="row-label">Sauvegarde automatique</span>
+        <input type="checkbox" id="gh-enabled" ${gh.enabled ? 'checked' : ''}>
+      </div>
+
+      <div class="stack mt-4">
+        <button class="btn btn-primary btn-block" data-act="gh-test">Tester et connecter</button>
+        <button class="btn btn-secondary btn-block" data-act="gh-push">⬆︎ Envoyer maintenant</button>
+        <button class="btn btn-secondary btn-block" data-act="gh-pull">⬇︎ Récupérer depuis GitHub</button>
+        ${isConfigured(gh) ? '<button class="btn btn-danger btn-block" data-act="gh-off">Déconnecter cet appareil</button>' : ''}
+      </div>
+
+      <p class="muted mt-4">
+        Le dépôt doit être <strong>privé</strong> : le fichier contient ton revenu
+        et chacune de tes dépenses. Crée un jeton
+        <em>fine-grained</em> limité à ce seul dépôt, permission
+        <strong>Contents : Read and write</strong>. Il reste sur cet appareil et
+        n'est jamais inclus dans une sauvegarde.
+      </p>
+    </section>
+
+    <section class="settings-section">
       <h2>Sauvegarde complète</h2>
       <div class="stack">
         <button class="btn btn-secondary btn-block" data-act="backup">🗄 Sauvegarder tout (JSON)</button>
@@ -86,9 +142,10 @@ export async function render(root, app) {
       </div>
       <p class="muted mt-4">
         Capture <strong>tout</strong> (catégories, budgets, commerçants, réglages,
-        dépenses) dans un fichier. Garde-le dans Fichiers / iCloud.
+        dépenses) dans un fichier — même format que la synchro GitHub, donc
+        interchangeable. Utile comme filet en plus, ou si tu n'utilises pas la synchro.
         ${cfg?.lastExportAt
-          ? '<br>Dernière sauvegarde : ' + new Date(cfg.lastExportAt).toLocaleDateString('fr-FR')
+          ? '<br>Dernier export : ' + new Date(cfg.lastExportAt).toLocaleDateString('fr-FR')
           : ''}
       </p>
     </section>
@@ -197,6 +254,9 @@ export async function render(root, app) {
     app.refresh();
   });
 
+  // ---- Synchronisation GitHub ----
+  bindGithubSync(root, app, gh);
+
   // ---- Fréquence du rappel de sauvegarde ----
   root.querySelector('#s-reminder').addEventListener('change', (e) => {
     settings.patch({ reminderDays: Number(e.target.value) }).then(() => app.toast('Rappel mis à jour.'));
@@ -248,6 +308,150 @@ export async function render(root, app) {
     if (!ok) return;
     const n = await resetMonth(year, month);
     app.toast(`${n} dépense(s) supprimée(s).`);
+  });
+}
+
+// --- Synchronisation GitHub -------------------------------------------------
+
+function bindGithubSync(root, app, gh) {
+  const statusEl = root.querySelector('#sync-status');
+
+  app.onCleanup(onSyncStatus((s) => {
+    statusEl.className = `sync-status is-${s.state}`;
+    statusEl.querySelector('.txt').textContent = statusLabel(s);
+  }));
+
+  // Lit les champs. Le jeton n'est remplacé que si l'utilisateur en saisit un
+  // nouveau : le champ est vide à l'affichage, on ne l'écrase pas par du vide.
+  const readForm = () => {
+    const typedToken = root.querySelector('#gh-token').value.trim();
+    return {
+      owner: root.querySelector('#gh-owner').value.trim(),
+      repo: root.querySelector('#gh-repo').value.trim(),
+      branch: root.querySelector('#gh-branch').value.trim() || 'main',
+      path: root.querySelector('#gh-path').value.trim() || 'comptes-clairs.json',
+      enabled: root.querySelector('#gh-enabled').checked,
+      ...(typedToken ? { token: typedToken } : {}),
+    };
+  };
+
+  // Sauvegarde silencieuse à chaque modification de champ : sans ça, appuyer
+  // sur « Envoyer » juste après avoir tapé le dépôt utiliserait l'ancien.
+  const persist = async () => saveSyncConfig(readForm());
+  root.querySelectorAll('#gh-owner, #gh-repo, #gh-branch, #gh-path, #gh-token')
+    .forEach((el) => el.addEventListener('change', persist));
+
+  root.querySelector('#gh-enabled').addEventListener('change', async () => {
+    const cfg = await saveSyncConfig(readForm());
+    if (cfg.enabled && !isConfigured(cfg)) {
+      app.toast('Renseigne le compte, le dépôt et le jeton.');
+      return;
+    }
+    await initSync(app); // (ré)arme ou désarme le moteur automatique
+    app.toast(cfg.enabled ? 'Sauvegarde automatique activée.' : 'Sauvegarde automatique désactivée.');
+  });
+
+  const withBusy = async (btn, fn) => {
+    const label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = '…';
+    try {
+      await fn();
+    } catch (e) {
+      app.toast(e.message, { duration: 5000 });
+    } finally {
+      btn.disabled = false;
+      btn.textContent = label;
+    }
+  };
+
+  root.querySelector('[data-act="gh-test"]').addEventListener('click', (e) =>
+    withBusy(e.currentTarget, async () => {
+      const cfg = await saveSyncConfig(readForm());
+      if (!isConfigured(cfg)) {
+        app.toast('Renseigne le compte, le dépôt et le jeton.');
+        return;
+      }
+      const info = await testConnection(cfg);
+
+      // Un dépôt public exposerait revenu, montants et commerçants au monde
+      // entier, définitivement (l'historique git ne s'efface pas). On ne
+      // bloque pas — mais on ne laisse pas passer ça en silence.
+      if (!info.private) {
+        const ok = await app.confirm({
+          title: '⚠️ Ce dépôt est public',
+          message:
+            `${info.fullName} est visible par tout le monde. Y écrire publierait `
+            + 'ton revenu, ton objectif d\'épargne et chacune de tes dépenses '
+            + '(date, montant, commerçant) — et ils resteraient dans l\'historique '
+            + 'git même après suppression. Utilise plutôt un dépôt privé.',
+          confirmLabel: 'Utiliser quand même',
+          danger: true,
+        });
+        if (!ok) return;
+      }
+
+      await saveSyncConfig({ enabled: true });
+      root.querySelector('#gh-enabled').checked = true;
+      await initSync(app);
+      app.toast(info.hasFile
+        ? `Connecté à ${info.fullName} — sauvegarde existante trouvée.`
+        : `Connecté à ${info.fullName} — dépôt vide, prêt.`);
+    }));
+
+  root.querySelector('[data-act="gh-push"]').addEventListener('click', (e) =>
+    withBusy(e.currentTarget, async () => {
+      const cfg = await saveSyncConfig(readForm());
+      if (!isConfigured(cfg)) { app.toast('Connecte d\'abord un dépôt.'); return; }
+      try {
+        await syncPush(cfg, { reason: 'envoi manuel' });
+      } catch (err) {
+        // Conflit = un autre appareil a écrit depuis. Signaler sans offrir de
+        // sortie laisserait la sync bloquée : on propose d'écraser, en disant
+        // clairement ce qui se perd.
+        if (err.kind !== 'conflict') throw err;
+        const ok = await app.confirm({
+          title: 'GitHub a changé depuis',
+          message: 'Un autre appareil a sauvegardé entre-temps. Envoyer maintenant '
+            + 'écrasera cette version-là par celle de cet appareil.',
+          confirmLabel: 'Écraser GitHub',
+          danger: true,
+        });
+        if (!ok) return;
+        await syncPush(cfg, { force: true, reason: 'envoi manuel (écrasement)' });
+      }
+      app.toast('Envoyé sur GitHub.');
+      app.refresh();
+    }));
+
+  root.querySelector('[data-act="gh-pull"]').addEventListener('click', (e) =>
+    withBusy(e.currentTarget, async () => {
+      const cfg = await saveSyncConfig(readForm());
+      if (!isConfigured(cfg)) { app.toast('Connecte d\'abord un dépôt.'); return; }
+      const ok = await app.confirm({
+        title: 'Récupérer depuis GitHub ?',
+        message: 'Les données de cet appareil seront REMPLACÉES par celles du dépôt.',
+        confirmLabel: 'Récupérer',
+        danger: true,
+      });
+      if (!ok) return;
+      const { counts } = await syncPull(cfg);
+      app.toast(`${counts.expenses} dépense(s) récupérée(s).`);
+      app.refresh();
+    }));
+
+  root.querySelector('[data-act="gh-off"]')?.addEventListener('click', async () => {
+    const ok = await app.confirm({
+      title: 'Déconnecter cet appareil ?',
+      message: 'Le jeton sera effacé d\'ici. Tes données locales et la sauvegarde '
+        + 'sur GitHub ne sont pas touchées.',
+      confirmLabel: 'Déconnecter',
+      danger: true,
+    });
+    if (!ok) return;
+    await syncDisconnect();
+    app.toast('Déconnecté.');
+    app.refresh();
   });
 }
 
