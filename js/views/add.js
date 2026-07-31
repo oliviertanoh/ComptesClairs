@@ -1,7 +1,8 @@
 // views/add.js — saisie d'une dépense. Doit être utilisable en < 10 s.
 // Sert aussi à MODIFIER une dépense existante (params.editId).
 
-import { categories, merchants, expenses, uuid } from '../db.js';
+import { categories, merchants, expenses, recurring, uuid } from '../db.js';
+import { ruleFromExpense } from '../recurring.js';
 import { toCents, toInputValue, formatEuros } from '../money.js';
 
 // Mémorise la dernière catégorie choisie pour accélérer les saisies en série.
@@ -33,13 +34,24 @@ export async function render(root, app, params = {}) {
     date: editing ? editing.date : todayISO(),
     note: editing ? (editing.note || '') : '',
     merchantId: null,
+    // 'expense' | 'income'. Une rentrée (remboursement d'un ami, prime, vente)
+    // n'est pas une dépense négative : elle ne doit entamer aucun budget de
+    // catégorie, seulement gonfler le revenu du mois.
+    kind: editing?.kind === 'income' ? 'income' : 'expense',
   };
 
   root.innerHTML = `
     <header class="screen-head">
-      <h1>${editing ? 'Modifier' : 'Ajouter une dépense'}</h1>
+      <h1>${editing ? 'Modifier' : 'Ajouter'}</h1>
       ${editing ? '' : '<button class="icon-btn" data-act="close" aria-label="Fermer">✕</button>'}
     </header>
+
+    <div class="kind-toggle" role="group" aria-label="Type d'opération">
+      <button type="button" data-kind="expense"
+              aria-pressed="${draft.kind === 'expense'}">Dépense</button>
+      <button type="button" data-kind="income"
+              aria-pressed="${draft.kind === 'income'}">Rentrée</button>
+    </div>
 
     <div class="field">
       <label for="f-amount">Montant</label>
@@ -58,7 +70,7 @@ export async function render(root, app, params = {}) {
       <ul id="suggestions" class="suggestions"></ul>
     </div>
 
-    <div class="field">
+    <div class="field" id="cat-field">
       <label>Catégorie</label>
       <div class="cat-picker" id="cat-picker">
         ${cats.map((c) => catButton(c, draft.categoryId)).join('')}
@@ -78,6 +90,9 @@ export async function render(root, app, params = {}) {
     <button class="btn btn-primary btn-block btn-lg" id="save">
       ${editing ? 'Enregistrer les modifications' : 'Enregistrer'}
     </button>
+    ${editing && !editing.recurringId && editing.kind !== 'income'
+      ? '<button class="btn btn-secondary btn-block mt-4" id="make-recurring">🔁 Celle-ci revient chaque mois</button>'
+      : ''}
     ${editing ? '<button class="btn btn-danger btn-block mt-4" id="delete">Supprimer</button>' : ''}
   `;
 
@@ -85,8 +100,32 @@ export async function render(root, app, params = {}) {
   const labelEl = root.querySelector('#f-label');
   const suggEl = root.querySelector('#suggestions');
   const pickerEl = root.querySelector('#cat-picker');
+  const catFieldEl = root.querySelector('#cat-field');
   const dateEl = root.querySelector('#f-date');
   const noteEl = root.querySelector('#f-note');
+  const saveEl = root.querySelector('#save');
+
+  // --- Dépense ou rentrée ---
+  function selectKind(kind) {
+    draft.kind = kind;
+    root.querySelectorAll('.kind-toggle button').forEach((b) => {
+      b.setAttribute('aria-pressed', String(b.dataset.kind === kind));
+    });
+    // Une rentrée n'appartient à aucun budget : afficher le sélecteur de
+    // catégorie laisserait croire qu'elle en alimente un.
+    const isIncome = kind === 'income';
+    catFieldEl.hidden = isIncome;
+    labelEl.placeholder = isIncome
+      ? 'Ex. Remboursement Léa, prime, Vinted…'
+      : 'Ex. Auchan, Uber Eats…';
+    if (!editing) saveEl.textContent = isIncome ? 'Enregistrer la rentrée' : 'Enregistrer';
+    if (isIncome) suggEl.innerHTML = '';
+  }
+
+  root.querySelectorAll('.kind-toggle button').forEach((b) => {
+    b.addEventListener('click', () => selectKind(b.dataset.kind));
+  });
+  selectKind(draft.kind);
 
   // --- Catégorie : sélection ---
   function selectCategory(id) {
@@ -151,7 +190,8 @@ export async function render(root, app, params = {}) {
 
   labelEl.addEventListener('input', () => {
     draft.merchantId = null; // saisie manuelle : on oublie la suggestion choisie
-    renderSuggestions(labelEl.value);
+    // La bibliothèque de commerçants ne concerne que les dépenses.
+    if (draft.kind !== 'income') renderSuggestions(labelEl.value);
   });
 
   // --- Fermer (croix) ---
@@ -171,11 +211,12 @@ export async function render(root, app, params = {}) {
       return;
     }
 
+    const isIncome = draft.kind === 'income';
     let categoryId = draft.categoryId;
     let label = labelEl.value.trim();
 
     // Libellé inconnu et aucune catégorie explicite -> Autre.
-    if (label === '' ) label = fallbackLabel(cats, categoryId);
+    if (label === '') label = isIncome ? 'Rentrée' : fallbackLabel(cats, categoryId);
     if (!categoryId) categoryId = autreCat.id;
 
     const record = {
@@ -184,8 +225,12 @@ export async function render(root, app, params = {}) {
       label,
       amount: cents,
       categoryId,
+      kind: isIncome ? 'income' : 'expense',
       note: noteEl.value.trim() || null,
       createdAt: editing ? editing.createdAt : Date.now(),
+      // Modifier une occurrence générée ne doit pas lui faire perdre son
+      // rattachement à la règle qui l'a créée.
+      ...(editing?.recurringId ? { recurringId: editing.recurringId, fixed: true } : {}),
     };
 
     await expenses.put(record);
@@ -196,16 +241,39 @@ export async function render(root, app, params = {}) {
 
     if (editing) {
       app.navigate('history');
-      app.toast('Dépense modifiée.');
+      app.toast(isIncome ? 'Rentrée modifiée.' : 'Dépense modifiée.');
       return;
     }
 
     app.navigate('month');
-    app.toast(`${formatEuros(cents)} enregistrés.`);
+    app.toast(isIncome
+      ? `+ ${formatEuros(cents)} enregistrés.`
+      : `${formatEuros(cents)} enregistrés.`);
 
     // Apprentissage : au 2e usage d'un libellé inconnu, proposer de l'ajouter.
-    await maybeLearn(label, categoryId, cents, merchantList, app);
+    // Sans objet pour une rentrée (pas de commerçant, pas de catégorie).
+    if (!isIncome) await maybeLearn(label, categoryId, cents, merchantList, app);
   }
+
+  // --- Transformer en charge fixe (mode édition) ---
+  root.querySelector('#make-recurring')?.addEventListener('click', async () => {
+    const day = Number(editing.date.slice(8, 10));
+    const ok = await app.confirm({
+      title: 'En faire une charge fixe ?',
+      message: `« ${editing.label} » (${formatEuros(editing.amount)}) sera recréée `
+        + `automatiquement le ${day} de chaque mois. Ce mois-ci n'est pas dupliqué. `
+        + 'Modifiable ensuite dans Réglages.',
+      confirmLabel: 'Créer la charge fixe',
+    });
+    if (!ok) return;
+    const rule = ruleFromExpense(editing, day);
+    await recurring.put(rule);
+    // La dépense d'origine devient l'occurrence du mois : on la rattache à la
+    // règle, sinon elle resterait comptée comme variable.
+    await expenses.put({ ...editing, recurringId: rule.id, fixed: true });
+    app.navigate('settings');
+    app.toast('Charge fixe créée.');
+  });
 
   // --- Supprimer (mode édition) ---
   root.querySelector('#delete')?.addEventListener('click', async () => {

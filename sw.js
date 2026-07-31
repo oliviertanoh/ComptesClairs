@@ -3,13 +3,15 @@
 // visite. Stratégie « cache-first » : on sert d'abord le cache, on ne va au
 // réseau que pour ce qui manque.
 //
-// L'app ne fait AUCUN appel réseau applicatif — seuls ses propres fichiers
-// sont concernés.
+// Seuls les fichiers de l'app sont concernés. Les appels à l'API GitHub
+// (sync.js) sortent vers une autre origine : on les laisse filer sans y
+// toucher — servir une réponse d'API depuis le cache donnerait un état
+// périmé, donc un faux conflit ou une restauration de vieilles données.
 //
 // Pense à incrémenter CACHE_VERSION quand tu modifies un fichier, sinon
 // l'ancienne version reste servie depuis le cache.
 
-const CACHE_VERSION = 'comptes-clairs-v4';
+const CACHE_VERSION = 'comptes-clairs-v6';
 
 const ASSETS = [
   './',
@@ -24,9 +26,12 @@ const ASSETS = [
   './js/money.js',
   './js/csv.js',
   './js/backup.js',
+  './js/sync.js',
+  './js/recurring.js',
   './js/views/month.js',
   './js/views/add.js',
   './js/views/history.js',
+  './js/views/bilan.js',
   './js/views/settings.js',
   './icons/icon-180.png',
   './icons/icon-192.png',
@@ -56,6 +61,10 @@ self.addEventListener('activate', (event) => {
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   if (request.method !== 'GET') return;
+
+  // Tout ce qui n'est pas à nous (api.github.com) passe au réseau tel quel :
+  // pas d'interception, pas de cache, pas de réponse périmée.
+  if (new URL(request.url).origin !== self.location.origin) return;
 
   event.respondWith(
     caches.match(request).then((cached) => {

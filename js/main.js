@@ -5,16 +5,19 @@
 import { openDB, categories } from './db.js';
 import { seedIfEmpty } from './seed.js';
 import { parseBackup, restoreBackup } from './backup.js';
+import { initSync, syncOnBoot, getConfig, isConfigured } from './sync.js';
 
 import * as monthView from './views/month.js';
 import * as addView from './views/add.js';
 import * as historyView from './views/history.js';
+import * as bilanView from './views/bilan.js';
 import * as settingsView from './views/settings.js';
 
 const ROUTES = {
   month: monthView,
   add: addView,
   history: historyView,
+  bilan: bilanView,
   settings: settingsView,
 };
 
@@ -34,6 +37,7 @@ const state = {
 let currentRoute = 'month';
 let pendingParams = {}; // params transmis à la prochaine vue (ex. édition)
 let toastTimer = null;
+let cleanups = []; // désabonnements à exécuter avant le prochain rendu
 
 const MONTHS_FR = [
   'janvier', 'février', 'mars', 'avril', 'mai', 'juin',
@@ -51,6 +55,35 @@ const app = {
   isCurrentMonth() {
     const n = new Date();
     return state.year === n.getFullYear() && state.month === n.getMonth() + 1;
+  },
+
+  /** Revient au mois en cours et rafraîchit. */
+  goToCurrentMonth() {
+    const n = new Date();
+    state.year = n.getFullYear();
+    state.month = n.getMonth() + 1;
+    this.refresh();
+  },
+
+  /**
+   * Bandeau affiché dès qu'on n'est PAS sur le mois en cours. Les budgets
+   * étant enregistrés par mois, éditer août en croyant éditer juillet donne
+   * l'impression que tout a disparu — le libellé seul ne suffisait pas.
+   */
+  offMonthBanner() {
+    if (this.isCurrentMonth()) return '';
+    const n = new Date();
+    return `
+      <div class="month-flag">
+        <span>Tu consultes <strong>${this.monthLabel()}</strong>, pas le mois en cours.</span>
+        <button data-act="today">${this.monthLabel(n.getFullYear(), n.getMonth() + 1)}</button>
+      </div>`;
+  },
+
+  /** Branche le bouton du bandeau ci-dessus, s'il est présent. */
+  bindOffMonthBanner(root) {
+    root.querySelector('.month-flag [data-act="today"]')
+      ?.addEventListener('click', () => this.goToCurrentMonth());
   },
 
   /** Change le mois affiché de ±1 et rafraîchit. */
@@ -74,6 +107,16 @@ const app = {
   /** Re-rend la route active (après une écriture en base). */
   refresh() {
     render(currentRoute, { keepParams: true });
+  },
+
+  /**
+   * Enregistre un nettoyage à exécuter quand la vue sera remplacée. Les vues
+   * étant re-rendues via innerHTML, tout abonnement à une source externe
+   * (état de synchro, timer…) doit passer par ici, sinon il survit au nœud.
+   * @param {()=>void} fn
+   */
+  onCleanup(fn) {
+    cleanups.push(fn);
   },
 
   /** Petit toast. options : { actionLabel, onAction, duration }. */
@@ -196,6 +239,11 @@ async function render(route, { keepParams = false } = {}) {
   const params = pendingParams;
   if (!keepParams) pendingParams = {};
 
+  for (const fn of cleanups) {
+    try { fn(); } catch { /* un nettoyage raté ne doit pas bloquer le rendu */ }
+  }
+  cleanups = [];
+
   viewEl.scrollTop = 0;
   viewEl.innerHTML = '';
   try {
@@ -240,16 +288,19 @@ function showEmptyStartChoice() {
         <h1 style="margin:0 0 var(--sp-2)">Comptes Clairs</h1>
         <p class="muted">Aucune donnée sur cet appareil.</p>
         <div class="stack mt-4" style="max-width:320px;margin-inline:auto">
-          <button class="btn btn-secondary btn-block" id="start-restore">♻︎ Restaurer une sauvegarde</button>
+          <button class="btn btn-secondary btn-block" id="start-github">☁︎ Récupérer depuis GitHub</button>
+          <button class="btn btn-secondary btn-block" id="start-restore">♻︎ Restaurer un fichier</button>
           <button class="btn btn-primary btn-block" id="start-fresh">Démarrer à neuf</button>
         </div>
-        <p class="muted mt-4">Si tu as un fichier de sauvegarde (iCloud / Fichiers),
-          restaure-le pour retrouver tes données.</p>
+        <p class="muted mt-4">Nouveau téléphone ? Connecte ton dépôt de
+          sauvegarde et tout revient. Sinon, un fichier de sauvegarde
+          (iCloud / Fichiers) fait l'affaire.</p>
         <input type="file" id="start-file" accept=".json,application/json" hidden>
       </div>`;
 
     const fileInput = viewEl.querySelector('#start-file');
     viewEl.querySelector('#start-fresh').addEventListener('click', () => resolve('fresh'));
+    viewEl.querySelector('#start-github').addEventListener('click', () => resolve('github'));
     viewEl.querySelector('#start-restore').addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', async () => {
       const file = fileInput.files?.[0];
@@ -275,15 +326,31 @@ async function boot() {
   // silencieuse.
   requestPersistentStorage();
 
+  const empty = (await categories.all()).length === 0;
+
+  // Synchro GitHub déjà connectée : c'est elle qui décide au démarrage.
+  // Base vide -> elle restaure toute seule (cas « nouveau téléphone »).
+  // Base pleine mais distant plus récent -> elle demande quoi garder.
+  let restoredFromGithub = false;
+  const gh = await getConfig();
+  if (isConfigured(gh) && gh.enabled) {
+    viewEl.innerHTML = '<div class="empty"><span class="emoji">☁︎</span>Synchronisation…</div>';
+    restoredFromGithub = (await syncOnBoot(app, { localEmpty: empty })) === 'restored';
+  }
+
   // Base vide (premier lancement OU purge de stockage) : proposer de restaurer
   // une sauvegarde avant de créer des données par défaut.
-  const empty = (await categories.all()).length === 0;
-  if (empty) {
+  let goToSettings = false;
+  if (empty && !restoredFromGithub) {
     const choice = await showEmptyStartChoice();
     if (choice !== 'restored') {
       await seedIfEmpty({ year: state.year, month: state.month });
     }
+    goToSettings = choice === 'github';
   }
+
+  // Envoi automatique après chaque écriture, à partir de maintenant.
+  await initSync(app);
 
   window.addEventListener('hashchange', onHashChange);
 
@@ -291,6 +358,7 @@ async function boot() {
     btn.addEventListener('click', () => app.navigate(btn.dataset.route));
   });
 
+  if (goToSettings) location.hash = '#settings';
   onHashChange();
 
   // Service worker (mode hors ligne). Ignoré si non supporté / non servi en
@@ -302,4 +370,25 @@ async function boot() {
   }
 }
 
-boot();
+// `boot()` est asynchrone : sans ce catch, la moindre erreur au démarrage
+// laissait « Chargement… » à l'écran indéfiniment, sans le moindre indice.
+// Un écran qui ne finit pas de charger est le pire des messages d'erreur.
+boot().catch((err) => {
+  console.error('Démarrage impossible', err);
+  viewEl.innerHTML = `
+    <div class="empty">
+      <span class="emoji">⚠️</span>
+      <h1 style="margin:0 0 var(--sp-2)">Démarrage impossible</h1>
+      <p class="muted">${escapeText(err?.message || String(err))}</p>
+      <div class="stack mt-4" style="max-width:320px;margin-inline:auto">
+        <button class="btn btn-primary btn-block" id="boot-retry">Réessayer</button>
+      </div>
+    </div>`;
+  viewEl.querySelector('#boot-retry').addEventListener('click', () => location.reload());
+});
+
+function escapeText(s) {
+  return String(s).replace(/[&<>"']/g, (ch) => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+  }[ch]));
+}

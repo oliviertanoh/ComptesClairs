@@ -31,19 +31,66 @@
     <!-- Une seule zone de vue, re-rendue à chaque changement d'onglet. -->
     <main id="view" class="view" role="main"></main>
 
-    <!-- Barre d'onglets inférieure. -->
+    <!-- Barre d'onglets inférieure.
+         Icônes en SVG inline : elles héritent de currentColor (donc de l'état
+         actif et du thème sombre), restent nettes à toute densité d'écran, et
+         ne dépendent pas du rendu d'emoji du système.
+         Les emoji restent en revanche pour les catégories : ce sont des
+         données, éditables par l'utilisateur.
+         L'ordre place « ＋ » au centre exact des 5 entrées. -->
     <nav class="tabbar" role="tablist" aria-label="Navigation principale">
       <button data-route="month" role="tab" aria-current="true">
-        <span class="ico" aria-hidden="true">📊</span>
+        <span class="ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+               stroke-linecap="round" stroke-linejoin="round" focusable="false">
+            <path d="M19 7V5.5A1.5 1.5 0 0 0 17.5 4H5.5A2.5 2.5 0 0 0 3 6.5v11A2.5 2.5 0 0 0 5.5 20h12a1.5 1.5 0 0 0 1.5-1.5V17"/>
+            <path d="M21 9.5h-4.5a2.5 2.5 0 0 0 0 5H21a1 1 0 0 0 1-1v-3a1 1 0 0 0-1-1z"/>
+          </svg>
+        </span>
         <span>Ce mois</span>
       </button>
-      <button class="tab-add" data-route="add" role="tab" aria-current="false">
-        <span class="ico" aria-hidden="true">＋</span>
-        <span>Ajouter</span>
-      </button>
       <button data-route="history" role="tab" aria-current="false">
-        <span class="ico" aria-hidden="true">🕓</span>
+        <span class="ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+               stroke-linecap="round" stroke-linejoin="round" focusable="false">
+            <circle cx="12" cy="12" r="8.5"/>
+            <path d="M12 7.5V12l3 1.8"/>
+          </svg>
+        </span>
         <span>Historique</span>
+      </button>
+      <!-- Pas de libellé : le « + » se lit seul, et la pastille de 44 px tient
+           alors dans la hauteur de barre sans rogner les autres onglets. -->
+      <button class="tab-add" data-route="add" role="tab" aria-current="false"
+              aria-label="Ajouter une opération">
+        <span class="ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25"
+               stroke-linecap="round" focusable="false">
+            <path d="M12 5.5v13M5.5 12h13"/>
+          </svg>
+        </span>
+      </button>
+      <button data-route="bilan" role="tab" aria-current="false">
+        <span class="ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+               stroke-linecap="round" stroke-linejoin="round" focusable="false">
+            <path d="M3.5 20.5h17"/>
+            <path d="M7 20.5v-5.5M12 20.5V7M17 20.5v-9"/>
+          </svg>
+        </span>
+        <span>Bilan</span>
+      </button>
+      <button data-route="settings" role="tab" aria-current="false">
+        <span class="ico" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75"
+               stroke-linecap="round" stroke-linejoin="round" focusable="false">
+            <path d="M4 7h10M18 7h2M4 12h3M11 12h9M4 17h8M16 17h4"/>
+            <circle cx="16" cy="7" r="2"/>
+            <circle cx="9" cy="12" r="2"/>
+            <circle cx="14" cy="17" r="2"/>
+          </svg>
+        </span>
+        <span>Réglages</span>
       </button>
     </nav>
   </div>

@@ -8,7 +8,7 @@
 // Un store par entité (voir §4 du spec).
 
 const DB_NAME = 'comptes-clairs';
-const DB_VERSION = 1;
+const DB_VERSION = 3;
 
 export const STORES = {
   categories: 'categories',
@@ -16,9 +16,38 @@ export const STORES = {
   merchants: 'merchants',
   monthlyBudgets: 'monthlyBudgets',
   settings: 'settings',
+  // v2 : configuration de synchronisation (dépôt, jeton). Volontairement
+  // HORS des stores exportés — un jeton GitHub ne doit jamais se retrouver
+  // dans un fichier de sauvegarde, encore moins poussé sur le dépôt.
+  sync: 'sync',
+  // v3 : charges fixes récurrentes (loyer, abonnements) et instantané du
+  // plan de chaque mois (revenu + objectif d'épargne d'alors).
+  recurring: 'recurring',
+  monthlyPlan: 'monthlyPlan',
 };
 
 let _dbPromise = null;
+
+// --- Notification des écritures ---------------------------------------------
+// La synchronisation a besoin de savoir « quelque chose a changé » sans que
+// chaque vue ait à l'appeler. On émet donc ici, au seul endroit qui écrit.
+
+const changes = new EventTarget();
+
+/**
+ * S'abonne aux écritures en base.
+ * @param {(store:string)=>void} handler
+ * @returns {()=>void} désabonnement
+ */
+export function onDbChange(handler) {
+  const wrapped = (e) => handler(e.detail.store);
+  changes.addEventListener('change', wrapped);
+  return () => changes.removeEventListener('change', wrapped);
+}
+
+function emitChange(store) {
+  changes.dispatchEvent(new CustomEvent('change', { detail: { store } }));
+}
 
 /** Ouvre (et migre au besoin) la base. Idempotent. */
 export function openDB() {
@@ -27,7 +56,7 @@ export function openDB() {
   _dbPromise = new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
 
-    req.onupgradeneeded = (event) => {
+    req.onupgradeneeded = () => {
       const db = req.result;
 
       if (!db.objectStoreNames.contains(STORES.categories)) {
@@ -52,13 +81,69 @@ export function openDB() {
       if (!db.objectStoreNames.contains(STORES.settings)) {
         db.createObjectStore(STORES.settings, { keyPath: 'id' });
       }
+
+      if (!db.objectStoreNames.contains(STORES.sync)) {
+        db.createObjectStore(STORES.sync, { keyPath: 'id' });
+      }
+
+      if (!db.objectStoreNames.contains(STORES.recurring)) {
+        db.createObjectStore(STORES.recurring, { keyPath: 'id' });
+      }
+
+      if (!db.objectStoreNames.contains(STORES.monthlyPlan)) {
+        db.createObjectStore(STORES.monthlyPlan, { keyPath: 'id' });
+      }
     };
 
-    req.onsuccess = () => resolve(req.result);
+    // Une migration échouée doit rejeter, pas laisser la promesse en l'air :
+    // sans ça l'app reste sur « Chargement… » indéfiniment.
+    req.onupgradeneeded = withUpgradeGuard(req, req.onupgradeneeded, reject);
+
+    // BLOQUÉ : un autre onglet (ou la PWA) tient encore la version
+    // précédente. Le navigateur n'émet alors NI onsuccess NI onerror — la
+    // promesse ne se règle jamais. C'est le cas qui figeait le démarrage.
+    req.onblocked = () => {
+      reject(new Error(
+        'Base de données verrouillée par un autre onglet. Ferme les autres '
+        + 'onglets (et l\'app installée) de Comptes Clairs, puis recharge.',
+      ));
+    };
+
+    req.onsuccess = () => {
+      const db = req.result;
+      // Symétrique : quand un AUTRE onglet voudra migrer, on libère la base
+      // au lieu de le bloquer à son tour.
+      db.onversionchange = () => db.close();
+      resolve(db);
+    };
     req.onerror = () => reject(req.error);
   });
 
+  // Une ouverture ratée ne doit pas être mise en cache : sans ça, toutes les
+  // tentatives suivantes rejetteraient avec la même vieille erreur, même
+  // après avoir fermé l'onglet fautif.
+  _dbPromise = _dbPromise.catch((err) => {
+    _dbPromise = null;
+    throw err;
+  });
+
   return _dbPromise;
+}
+
+/**
+ * Enveloppe le gestionnaire de migration pour transformer une exception en
+ * rejet de la promesse. Une erreur levée dans `onupgradeneeded` avorte la
+ * transaction de version sans déclencher `onerror` de façon fiable.
+ */
+function withUpgradeGuard(req, handler, reject) {
+  return (event) => {
+    try {
+      handler.call(req, event);
+    } catch (err) {
+      reject(new Error(`Migration de la base impossible : ${err.message}`));
+      try { req.transaction?.abort(); } catch { /* déjà avortée */ }
+    }
+  };
 }
 
 // --- primitives bas niveau --------------------------------------------------
@@ -88,12 +173,15 @@ async function put(store, value) {
   const db = await openDB();
   const os = tx(db, store, 'readwrite');
   await asPromise(os.put(value));
+  emitChange(store);
   return value;
 }
 
 async function del(store, key) {
   const db = await openDB();
-  return asPromise(tx(db, store, 'readwrite').delete(key));
+  const result = await asPromise(tx(db, store, 'readwrite').delete(key));
+  emitChange(store);
+  return result;
 }
 
 /** Insère un lot dans une seule transaction (utilisé par le seed / l'import). */
@@ -103,7 +191,7 @@ async function bulkPut(store, values) {
     const t = db.transaction(store, 'readwrite');
     const os = t.objectStore(store);
     for (const v of values) os.put(v);
-    t.oncomplete = () => resolve(values.length);
+    t.oncomplete = () => { emitChange(store); resolve(values.length); };
     t.onerror = () => reject(t.error);
   });
 }
@@ -213,6 +301,76 @@ export const monthlyBudgets = {
   },
 };
 
+// --- Charges fixes récurrentes ----------------------------------------------
+//
+// Une règle décrit une charge qui retombe chaque mois (loyer, abonnement).
+// `materialized` liste les mois où la dépense a déjà été créée : c'est ce qui
+// rend la génération idempotente ET permet de supprimer une occurrence sans
+// la voir réapparaître au prochain affichage du mois.
+//
+// { id, label, amount, categoryId, dayOfMonth, active,
+//   startMonth:'YYYY-MM', endMonth:'YYYY-MM'|null, materialized:['YYYY-MM'] }
+
+export const recurring = {
+  async all() {
+    const list = await getAll(STORES.recurring);
+    return list.sort((a, b) => (a.dayOfMonth - b.dayOfMonth) || a.label.localeCompare(b.label));
+  },
+  get: (id) => get(STORES.recurring, id),
+  put: (rule) => put(STORES.recurring, rule),
+  delete: (id) => del(STORES.recurring, id),
+  bulkPut: (list) => bulkPut(STORES.recurring, list),
+};
+
+// --- Plan mensuel (revenu + objectif du mois) -------------------------------
+//
+// Le revenu ne vit plus seulement dans `settings` : on en fige un instantané
+// par mois. Sans ça, l'écran Bilan recalculerait l'épargne de mars avec le
+// salaire d'aujourd'hui — un historique faux est pire que pas d'historique.
+
+export const monthlyPlan = {
+  all: () => getAll(STORES.monthlyPlan),
+  put: (plan) => put(STORES.monthlyPlan, plan),
+  bulkPut: (list) => bulkPut(STORES.monthlyPlan, list),
+
+  /**
+   * Instantané d'un mois. Créé à la volée depuis les réglages pour le mois
+   * courant et les suivants.
+   *
+   * Pour un mois PASSÉ sans instantané, on renvoie un objet à zéro SANS
+   * l'enregistrer : y estampiller le revenu d'aujourd'hui inventerait un
+   * historique. On ne sait pas ce qui est rentré en mars — l'écran Bilan
+   * masque donc ce mois, et l'utilisateur peut le renseigner explicitement
+   * depuis les réglages (ce qui, lui, écrit vraiment).
+   */
+  async ensure(year, month) {
+    const id = monthKey(year, month);
+    const existing = await get(STORES.monthlyPlan, id);
+    if (existing) return existing;
+
+    const now = new Date();
+    const isPast = id < monthKey(now.getFullYear(), now.getMonth() + 1);
+
+    const cfg = (await settings.get()) || {};
+    const draft = {
+      id,
+      year,
+      month,
+      income: isPast ? 0 : (cfg.monthlyIncome ?? 0),
+      savingsTarget: isPast ? 0 : (cfg.savingsTarget ?? 0),
+    };
+    if (isPast) return draft;
+
+    await put(STORES.monthlyPlan, draft);
+    return draft;
+  },
+};
+
+/** Clé de mois normalisée « YYYY-MM ». */
+export function monthKey(year, month) {
+  return `${year}-${String(month).padStart(2, '0')}`;
+}
+
 // --- Réglages (singleton) ---------------------------------------------------
 
 const SETTINGS_ID = 'singleton';
@@ -230,6 +388,27 @@ export const settings = {
   },
 };
 
+// --- Config de synchronisation (singleton, JAMAIS exportée) -----------------
+//
+// Vit dans son propre store pour une raison précise : `exportAll()` ne le lit
+// pas, donc le jeton GitHub ne peut pas se retrouver dans une sauvegarde —
+// ni dans le fichier JSON, ni dans le fichier poussé sur le dépôt.
+// `importAll()` ne le vide pas non plus : restaurer une sauvegarde ne
+// déconnecte pas l'appareil.
+
+const SYNC_ID = 'github';
+
+export const syncConfig = {
+  async get() {
+    return (await get(STORES.sync, SYNC_ID)) || null;
+  },
+  async patch(partial) {
+    const current = (await this.get()) || { id: SYNC_ID };
+    return put(STORES.sync, { ...current, ...partial, id: SYNC_ID });
+  },
+  clear: () => del(STORES.sync, SYNC_ID),
+};
+
 // --- Réinitialisation d'un mois --------------------------------------------
 
 /** Supprime toutes les dépenses d'un mois donné (avec confirmation côté vue). */
@@ -240,7 +419,7 @@ export async function resetMonth(year, month) {
     const t = db.transaction(STORES.expenses, 'readwrite');
     const os = t.objectStore(STORES.expenses);
     for (const e of list) os.delete(e.id);
-    t.oncomplete = () => resolve(list.length);
+    t.oncomplete = () => { emitChange(STORES.expenses); resolve(list.length); };
     t.onerror = () => reject(t.error);
   });
 }
@@ -257,11 +436,13 @@ async function clearStore(store) {
  *   monthlyBudgets:array, settings:object|null}>}
  */
 export async function exportAll() {
-  const [cats, exps, merch, budgets, cfg] = await Promise.all([
+  const [cats, exps, merch, budgets, rules, plans, cfg] = await Promise.all([
     getAll(STORES.categories),
     getAll(STORES.expenses),
     getAll(STORES.merchants),
     getAll(STORES.monthlyBudgets),
+    getAll(STORES.recurring),
+    getAll(STORES.monthlyPlan),
     settings.get(),
   ]);
   return {
@@ -269,6 +450,8 @@ export async function exportAll() {
     expenses: exps,
     merchants: merch,
     monthlyBudgets: budgets,
+    recurring: rules,
+    monthlyPlan: plans,
     settings: cfg,
   };
 }
@@ -279,17 +462,24 @@ export async function exportAll() {
  * @param {object} data structure renvoyée par exportAll()
  */
 export async function importAll(data) {
+  // STORES.sync est délibérément absent : restaurer une sauvegarde ne doit
+  // pas déconnecter l'appareil de son dépôt (le jeton n'est de toute façon
+  // jamais dans le fichier).
   await Promise.all([
     clearStore(STORES.categories),
     clearStore(STORES.expenses),
     clearStore(STORES.merchants),
     clearStore(STORES.monthlyBudgets),
+    clearStore(STORES.recurring),
+    clearStore(STORES.monthlyPlan),
     clearStore(STORES.settings),
   ]);
   if (data.categories?.length) await bulkPut(STORES.categories, data.categories);
   if (data.expenses?.length) await bulkPut(STORES.expenses, data.expenses);
   if (data.merchants?.length) await bulkPut(STORES.merchants, data.merchants);
   if (data.monthlyBudgets?.length) await bulkPut(STORES.monthlyBudgets, data.monthlyBudgets);
+  if (data.recurring?.length) await bulkPut(STORES.recurring, data.recurring);
+  if (data.monthlyPlan?.length) await bulkPut(STORES.monthlyPlan, data.monthlyPlan);
   if (data.settings) await settings.put(data.settings);
 }
 
