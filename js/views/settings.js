@@ -36,6 +36,11 @@ export async function render(root, app) {
                value="${toInputValue(cfg?.monthlyIncome ?? 0)}">
       </div>
       <div class="list-row">
+        <span class="row-label">Découvert autorisé</span>
+        <input id="s-overdraft" type="text" inputmode="decimal"
+               value="${toInputValue(cfg?.allowedOverdraft ?? 0)}">
+      </div>
+      <div class="list-row">
         <span class="row-label">Objectif d'épargne</span>
         <input id="s-savings" type="text" inputmode="decimal"
                value="${toInputValue(cfg?.savingsTarget ?? 0)}">
@@ -57,8 +62,16 @@ export async function render(root, app) {
     <section class="settings-section">
       <h2>Catégories</h2>
       <div id="cat-list">
-        ${cats.sort((a, b) => a.sortOrder - b.sortOrder).map((c) => catRow(c)).join('')}
+        ${cats.filter(c => !c.archived).sort((a, b) => a.sortOrder - b.sortOrder).map((c) => catRow(c)).join('')}
       </div>
+      ${cats.some(c => c.archived) ? `
+        <details class="mt-4">
+          <summary class="btn btn-secondary btn-block">📦 Catégories archivées (${cats.filter(c => c.archived).length})</summary>
+          <div id="archived-cat-list" style="margin-top:var(--sp-3)">
+            ${cats.filter(c => c.archived).sort((a, b) => a.sortOrder - b.sortOrder).map((c) => catRow(c)).join('')}
+          </div>
+        </details>
+      ` : ''}
       <button class="btn btn-secondary btn-block mt-4" data-act="add-cat">＋ Nouvelle catégorie</button>
     </section>
 
@@ -108,10 +121,22 @@ export async function render(root, app) {
 
   // ---- Revenus / épargne (sauvegarde à la sortie du champ) ----
   root.querySelector('#s-income').addEventListener('change', (e) => {
-    settings.patch({ monthlyIncome: toCents(e.target.value) }).then(() => app.toast('Revenu mis à jour.'));
+    settings.patch({ monthlyIncome: toCents(e.target.value) }).then(() => {
+      app.toast('Revenu mis à jour.');
+      app.refresh();
+    });
   });
   root.querySelector('#s-savings').addEventListener('change', (e) => {
-    settings.patch({ savingsTarget: toCents(e.target.value) }).then(() => app.toast('Objectif mis à jour.'));
+    settings.patch({ savingsTarget: toCents(e.target.value) }).then(() => {
+      app.toast('Objectif mis à jour.');
+      app.refresh();
+    });
+  });
+  root.querySelector('#s-overdraft').addEventListener('change', (e) => {
+    settings.patch({ allowedOverdraft: toCents(e.target.value) }).then(() => {
+      app.toast('Découvert mis à jour.');
+      app.refresh();
+    });
   });
 
   // ---- Budgets du mois ----
@@ -124,20 +149,25 @@ export async function render(root, app) {
         year, month, categoryId, amount,
       });
       app.toast('Budget mis à jour.');
+      app.refresh();
     });
   });
 
   // ---- Catégories ----
-  root.querySelector('[data-act="add-cat"]').addEventListener('click', () => editCategory(app, null, cats));
-  root.querySelectorAll('#cat-list .list-row').forEach((row) => {
-    const id = row.dataset.id;
-    const cat = cats.find((c) => c.id === id);
-    row.querySelector('[data-act="edit-cat"]').addEventListener('click', () => editCategory(app, cat, cats));
-    row.querySelector('[data-act="archive-cat"]').addEventListener('click', async () => {
-      await categories.put({ ...cat, archived: !cat.archived });
-      app.refresh();
+  const attachCatHandlers = (listSelector) => {
+    root.querySelectorAll(`${listSelector} .list-row`).forEach((row) => {
+      const id = row.dataset.id;
+      const cat = cats.find((c) => c.id === id);
+      row.querySelector('[data-act="edit-cat"]').addEventListener('click', () => editCategory(app, cat, cats));
+      row.querySelector('[data-act="archive-cat"]').addEventListener('click', async () => {
+        await categories.put({ ...cat, archived: !cat.archived });
+        app.refresh();
+      });
     });
-  });
+  };
+  root.querySelector('[data-act="add-cat"]').addEventListener('click', () => editCategory(app, null, cats));
+  attachCatHandlers('#cat-list');
+  attachCatHandlers('#archived-cat-list');
 
   // ---- Commerçants ----
   const merchListEl = root.querySelector('#merch-list');

@@ -28,6 +28,23 @@ a,
   -webkit-tap-highlight-color: transparent;
 }
 
+/* Transitions fluides pour feedback tactile */
+button,
+a,
+.tap {
+  transition: opacity 150ms ease-out, transform 150ms ease-out, background-color 150ms ease-out;
+}
+
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  button,
+  a,
+  .tap {
+    transition: none;
+    transform: none !important;
+  }
+}
+
 /* ------------------------------------------------------------------ Shell */
 
 .app {
@@ -80,6 +97,7 @@ a,
   gap: 2px;
   cursor: pointer;
   padding: var(--sp-2) 0;
+  transition: color 200ms ease-out;
 }
 
 .tabbar button .ico {
@@ -152,6 +170,8 @@ a,
 
 .icon-btn:active {
   background: var(--surface-2);
+  opacity: 0.85;
+  transform: scale(0.96);
 }
 
 /* ------------------------------------------------------------- Composants */
@@ -537,6 +557,8 @@ textarea {
 
 .btn-primary:active {
   background: var(--accent-strong);
+  opacity: 0.9;
+  transform: scale(0.98);
 }
 
 .btn-block {
@@ -944,6 +966,60 @@ textarea {
   font-size: 40px;
   display: block;
   margin-bottom: var(--sp-3);
+}
+
+/* Sections collapse pour catégories archivées, etc. */
+details {
+  margin-top: var(--sp-2);
+}
+
+details > summary {
+  cursor: pointer;
+  list-style: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+details > summary::-webkit-details-marker {
+  display: none;
+}
+
+details > summary::before {
+  content: "▶ ";
+  display: inline-block;
+  transform: translateY(-2px);
+  transition: transform 0.2s ease;
+}
+
+details[open] > summary::before {
+  transform: rotate(90deg) translateY(-2px);
+}
+
+/* ----- Icônes SVG (remplacent les emojis) ----- */
+
+.icon {
+  width: 24px;
+  height: 24px;
+  display: inline-block;
+  vertical-align: -4px;
+  color: currentColor;
+  flex-shrink: 0;
+}
+
+.tabbar .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.alert-banner .icon,
+.backup-nudge .icon {
+  width: 20px;
+  height: 20px;
+}
+
+.icon-btn .icon {
+  width: 20px;
+  height: 20px;
 }
 
 /* Respecter la préférence de mouvement réduit. */

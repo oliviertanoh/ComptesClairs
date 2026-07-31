@@ -25,7 +25,7 @@ export async function render(root, app) {
   ]);
 
   const budgetMap = new Map(budgets.map((b) => [b.categoryId, b.amount]));
-  const income = cfg?.monthlyIncome ?? 0;
+  const income = (cfg?.monthlyIncome ?? 0) + (cfg?.allowedOverdraft ?? 0);
 
   const summary = summarizeMonth({
     categories: cats,
