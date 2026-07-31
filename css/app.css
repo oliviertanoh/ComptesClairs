@@ -211,6 +211,13 @@ a,
   box-shadow: var(--shadow-1);
 }
 
+@media (prefers-color-scheme: dark) {
+  .card {
+    background: linear-gradient(135deg, var(--surface) 0%, color-mix(in srgb, var(--surface) 95%, var(--accent-soft)) 100%);
+    box-shadow: var(--shadow-2);
+  }
+}
+
 /* Bandeau d'alerte prioritaire (Restau/livraison). */
 .alert-banner {
   display: flex;

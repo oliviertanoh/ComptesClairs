@@ -103,37 +103,40 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #10151b;
-    --surface: #1a2029;
-    --surface-2: #232b36;
-    --text: #e7ecf2;
-    --text-muted: #9fb0c0;
-    --text-faint: #6b7c8c;
-    --border: #2b3543;
-    --border-strong: #3a4655;
+    /* Palette sombre sophistiquée : background profond, surfaces avec relief */
+    --bg: #0d0f14;
+    --surface: #16191f;
+    --surface-2: #1f2530;
+    --text: #f0f3f7;
+    --text-muted: #a8b5c5;
+    --text-faint: #737d8a;
+    --border: #252d38;
+    --border-strong: #333d4a;
 
-    --accent: #6ea3d4;
-    --accent-strong: #86b4de;
-    --accent-soft: #1f2d3d;
-    --on-accent: #0f1620;
+    /* Accent bleu plus saturé pour meilleur contraste en sombre */
+    --accent: #5fa3d9;
+    --accent-strong: #7bb3e5;
+    --accent-soft: #1a2536;
+    --on-accent: #f0f3f7;
 
-    /* Mode sombre CHOISI, pas un basculement automatique : les quatre rôles
-     * sont re-marchés pour la bande sombre et revalidés contre #1a2029. */
-    --viz-fixed: #c9743e;
-    --viz-spent: #4a86c4;
-    --viz-track: #38495f;
-    --viz-savings: #35ad72;
+    /* Palette de visualisation pour dark mode */
+    --viz-fixed: #d67d3a;
+    --viz-spent: #5fa3d9;
+    --viz-track: #3a4a5f;
+    --viz-savings: #2ecc71;
 
-    --state-green: #4ecb92;
-    --state-green-bg: #16302a;
-    --state-neutral: #9fb0c0;
-    --state-neutral-bg: #232b36;
-    --state-orange: #f0a838;
-    --state-orange-bg: #33280f;
-    --state-red: #f06a6a;
-    --state-red-bg: #351d1d;
+    /* États avec couleurs plus vives pour la sombre */
+    --state-green: #2ecc71;
+    --state-green-bg: #0f2818;
+    --state-neutral: #a8b5c5;
+    --state-neutral-bg: #1f2530;
+    --state-orange: #f5a623;
+    --state-orange-bg: #3d2a0f;
+    --state-red: #ff6b6b;
+    --state-red-bg: #3d1515;
 
-    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-2: 0 4px 16px rgba(0, 0, 0, 0.4);
+    /* Ombres avec plus de profondeur pour le dark */
+    --shadow-1: 0 2px 4px rgba(0, 0, 0, 0.5);
+    --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.6);
   }
 }
